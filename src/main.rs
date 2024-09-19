@@ -1,9 +1,3 @@
-use serde::{Deserialize, Deserializer, Serialize};
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::fs::File;
-use std::rc::{Rc, Weak};
 use std::str::FromStr;
 use std::sync::{
     mpsc,
@@ -73,7 +67,7 @@ fn main() {
                                 match comp.node_type {
                                     NodeType::LIGHT_BULB => {
                                         print!("light");
-                                        match &comp.arguments.label {
+                                        match &comp.label {
                                             Some(label) => {
                                                 println!("({})", label);
                                             }
@@ -84,7 +78,7 @@ fn main() {
                                     }
                                     NodeType::SEVEN_SEGMENT_DISPLAY_DECODER => {
                                         print!("hex");
-                                        match &comp.arguments.label {
+                                        match &comp.label {
                                             Some(label) => {
                                                 print!("({}) ", label);
                                             }
@@ -109,7 +103,7 @@ fn main() {
                             for i in 0..n.inputs.len() {
                                 let comp = &n.components[n.inputs[i]];
                                 print!("{}:\t{:?}", i, n.components[n.inputs[i]].node_type);
-                                match &comp.arguments.label {
+                                match &comp.label {
                                     Some(label) => {
                                         print!("({})", label);
                                     }
@@ -141,9 +135,7 @@ fn main() {
                                                                     "{} {:?}({:?})",
                                                                     i,
                                                                     &ic.components[i].node_type,
-                                                                    &ic.components[i]
-                                                                        .arguments
-                                                                        .label
+                                                                    &ic.components[i].label
                                                                 );
                                                             }
                                                         }
@@ -171,9 +163,7 @@ fn main() {
                                 for i in 0..n.components.len() {
                                     println!(
                                         "{} {:?}({:?})",
-                                        i,
-                                        &n.components[i].node_type,
-                                        &n.components[i].arguments.label
+                                        i, &n.components[i].node_type, &n.components[i].label
                                     );
                                 }
                             }

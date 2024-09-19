@@ -1,16 +1,11 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::fs::File;
 use std::rc::{Rc, Weak};
 use std::str::FromStr;
-use std::sync::{
-    mpsc,
-    mpsc::{Receiver, TryRecvError},
-};
-use std::time::{Duration, Instant};
-use std::{io, thread};
+use std::time::Instant;
 
 #[allow(non_camel_case_types)]
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -144,17 +139,6 @@ impl Debug for Input {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, Default)]
-#[serde(rename_all = "UPPERCASE")]
-pub struct Arguments {
-    pub label: Option<String>,
-    enabled: Option<bool>,
-    uri: Option<String>,
-    cid: Option<String>,
-    num_of_in: Option<usize>,
-    num_of_out: Option<usize>,
-}
-
 fn default_outputs() -> Rc<RefCell<Vec<bool>>> {
     return Rc::new(RefCell::new(Vec::new()));
 }
@@ -163,6 +147,7 @@ fn default_outputs() -> Rc<RefCell<Vec<bool>>> {
 pub struct Node {
     #[serde(rename = "TAG")]
     pub node_type: NodeType,
+    #[serde(default)]
     inputs: Vec<Input>,
     #[serde(skip)]
     pub input_states: Vec<InputState>,
@@ -175,8 +160,13 @@ pub struct Node {
     id: ID,
     x: f32,
     y: f32,
-    #[serde(default)]
-    pub arguments: Arguments,
+    pub label: Option<String>,
+    enabled: Option<bool>,
+    uri: Option<String>,
+    cid: Option<String>,
+    num_of_in: Option<usize>,
+    num_of_out: Option<usize>,
+
     #[serde(skip)]
     pub ic_instance: Option<IC>,
     #[serde(default)]
@@ -185,27 +175,41 @@ pub struct Node {
     pub last_cycle: Option<Instant>,
 }
 
-fn get_input(input: &Input, default: bool) -> bool {
-    match input.other_output.upgrade() {
-        Some(x) => {
-            let o = (&x).try_borrow().unwrap();
-            if input.other_pin >= o.len() {
-                println!("{:#?}[{}]", o, input.other_pin);
-            }
-            o[input.other_pin]
-        }
-        None => default,
-    }
-}
 impl Node {
-    fn ic_add_deps(
+    //of IC
+    fn set_instance(&mut self, dependencies: &BTreeMap<String, IC>) {
+        //let comp = self.components[i].clone();
+        if self.ic_instance.is_some() {
+            return;
+        }
+        let cid = self.cid.as_ref().expect("cid");
+        let original = &dependencies[cid];
+        let mut new = IC {
+            header: original.header.clone(),
+            components: Vec::with_capacity(original.components.len()),
+            inputs: Vec::with_capacity(self.num_of_in.expect("num_of_in")),
+            outputs: Vec::with_capacity(self.num_of_out.expect("num_of_out")),
+            wires: original.wires.clone(),
+            subdeps: BTreeSet::new(),
+        };
+        //individualy clone components
+        for comp in &original.components {
+            let mut new_comp = comp.clone();
+            new_comp.outputs = Rc::new(RefCell::new((*comp.outputs.try_borrow().unwrap()).clone()));
+            new.components.push(new_comp);
+        }
+        new.init_ic(dependencies);
+        self.ic_instance = Some(new);
+    }
+    #[must_use = "these are the deps needed"]
+    fn ic_get_subdeps(
         &self,
-        dependencies: &HashMap<String, IC>,
-        needed: &mut HashMap<String, String>,
+        dependencies: &BTreeMap<String, IC>,
         uris: &HashMap<String, String>,
-    ) {
-        let cid = self.arguments.cid.as_ref().expect("cid");
-        let uri = match self.arguments.uri.as_ref() {
+    ) -> HashMap<String, String> {
+        let mut needed: HashMap<String, String> = HashMap::new();
+        let cid = self.cid.as_ref().expect("cid");
+        let uri = match self.uri.as_ref() {
             Some(uri) => uri,
             //check if it's in URIs.json
             None => match uris.get(cid) {
@@ -220,20 +224,18 @@ impl Node {
         };
         if !dependencies.contains_key(cid) {
             needed.insert(cid.clone(), uri.clone());
-            println!("found {}", uri);
+            println!("needed {}", uri);
         }
+        needed
     }
     fn init_output(&mut self) {
         let output_n = match self.node_type {
             NodeType::INTEGRATED_CIRCUIT => {
-                let num_of_out = self.arguments.num_of_out.expect("num_of_out");
+                let num_of_out = self.num_of_out.expect("num_of_out");
                 println!(
                     "{} outputs for {}",
                     num_of_out,
-                    self.arguments
-                        .label
-                        .as_ref()
-                        .get_or_insert(&"IC".to_string())
+                    self.label.as_ref().get_or_insert(&"IC".to_string())
                 );
                 num_of_out
             }
@@ -268,9 +270,22 @@ impl Node {
             _ => {}
         }
         //also input_states
-        self.input_states
-            .resize(self.inputs.len(), InputState::default());
-        //println!("outputs:{:#?} for {:?}", outputs, self.node_type);
+        //println!("inputs:{:#?} for {:?}", &self.inputs, self.node_type);
+    }
+    fn get_input(&self, input: &Input, default: bool) -> bool {
+        match input.other_output.upgrade() {
+            Some(x) => {
+                let o = (&x).try_borrow().unwrap();
+                if input.other_pin >= o.len() {
+                    println!(
+                        "{:#?}[pin: {}] id:{}",
+                        o, input.other_pin, &input.other_id.0
+                    );
+                }
+                o[input.other_pin]
+            }
+            None => default,
+        }
     }
     fn get_inputs(&mut self) {
         let default = match &self.node_type {
@@ -280,7 +295,7 @@ impl Node {
         for (i, input) in self.inputs.iter().enumerate() {
             self.input_states[i] = InputState {
                 in_pin: input.in_pin,
-                state: get_input(input, default),
+                state: self.get_input(input, default),
             }
         }
     }
@@ -361,7 +376,7 @@ impl Node {
                     println!(
                         "getting {:?} for {}",
                         input,
-                        self.arguments.label.as_ref().unwrap_or(&"IC".to_string())
+                        self.label.as_ref().unwrap_or(&"IC".to_string())
                     );
                     */
                     let out: bool = input.state;
@@ -561,7 +576,6 @@ struct ICHeader {
 
 #[derive(Deserialize, Debug, Clone)]
 struct Wire {
-    //TODO make this "ID:pin"
     #[serde(rename = "S")]
     to: WireID,
     #[serde(rename = "E")]
@@ -606,12 +620,24 @@ impl<'de> Visitor<'de> for WireIDVisitor {
     type Value = WireID;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("string")
+        formatter.write_str("String")
     }
 
     fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
     where
-        E: de::Error,
+        E: Error,
+    {
+        self.visit_str(&v)
+    }
+    fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+    where
+        E: Error,
+    {
+        self.visit_str(v)
+    }
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: Error,
     {
         let mut iter = v.split(':');
         let id;
@@ -646,7 +672,9 @@ impl<'de> Visitor<'de> for WireIDVisitor {
         Ok(WireID(id, pin))
     }
 }
-
+fn sort_comps(components: &mut Vec<Node>) {
+    components.sort_by(|comp1, comp2| comp1.y.total_cmp(&comp2.y));
+}
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct IC {
@@ -659,10 +687,11 @@ pub struct IC {
     pub outputs: Vec<usize>,
     #[serde(default)]
     wires: Vec<Wire>,
+    #[serde(skip)]
+    subdeps: BTreeSet<String>,
 }
 impl IC {
-    //get input indecies
-    fn init_ic(&mut self, ics: &mut HashMap<String, IC>) {
+    fn connect(&mut self) {
         let mut ids = HashMap::new();
         for comp in &self.components {
             ids.insert(comp.id.clone(), Rc::downgrade(&comp.outputs));
@@ -672,24 +701,42 @@ impl IC {
                 //find other comp
                 input.other_output = ids.get(&input.other_id).unwrap().clone();
             }
-            comp.init_output();
+            comp.input_states
+                .resize(comp.inputs.len(), InputState::default());
+            println!(
+                "resizing({:?}): input_states: {:?} inputs:{:?}",
+                &comp.node_type, &comp.input_states, &comp.inputs
+            );
         }
         //for new fromat with wires
         for wire in &self.wires {
-            self.components
+            let comp = self
+                .components
                 .iter_mut()
                 .find(|comp| comp.id == wire.to.0)
-                .unwrap()
-                .inputs
-                .push(Input {
-                    other_output: ids.get(&wire.from.0).unwrap().clone(),
-                    other_pin: wire.from.1,
-                    other_id: wire.from.0.clone(),
-                    in_pin: wire.to.1,
-                })
+                .unwrap();
+            comp.inputs.push(Input {
+                other_output: ids.get(&wire.from.0).unwrap().clone(),
+                other_pin: wire.from.1,
+                other_id: wire.from.0.clone(),
+                in_pin: wire.to.1,
+            });
+            comp.input_states
+                .resize(comp.inputs.len(), InputState::default());
+            println!(
+                "resizing({:?}): input_states: {:?} inputs:{:?}",
+                &comp.node_type, &comp.input_states, &comp.inputs
+            );
         }
-        for i in 0..self.components.len() {
-            let comp = &self.components[i];
+    }
+    //get input indecies
+    fn init_ic(&mut self, deps: &BTreeMap<String, IC>) {
+        sort_comps(&mut self.components);
+        for comp in self.components.iter_mut() {
+            comp.init_output();
+        }
+        self.connect();
+        for comp in self.components {
             //init input indecies Vec
             if comp.node_type == NodeType::PULSE_BUTTON || comp.node_type == NodeType::TOGGLE_BUTTON
             {
@@ -697,23 +744,10 @@ impl IC {
             } else if comp.node_type == NodeType::LIGHT_BULB {
                 self.outputs.push(i);
             }
-            //set instance for IC
-            else if comp.node_type == NodeType::INTEGRATED_CIRCUIT {
-                set_instance(&mut self.components[i], ics);
-            }
         }
-        self.inputs.sort_by(|comp1, comp2| {
-            self.components[*comp1]
-                .y
-                .partial_cmp(&self.components[*comp2].y)
-                .unwrap()
-        });
-        self.outputs.sort_by(|comp1, comp2| {
-            self.components[*comp1]
-                .y
-                .partial_cmp(&self.components[*comp2].y)
-                .unwrap()
-        });
+        for comp in &mut self.components {
+            comp.set_instance(&deps);
+        }
     }
 }
 #[derive(Deserialize, Default, Debug)]
@@ -734,7 +768,7 @@ pub struct Circuit {
     header: Header,
     pub components: Vec<Node>,
     #[serde(default)]
-    dependencies: HashMap<String, IC>,
+    dependencies: BTreeMap<String, IC>,
     //indicies of inputs
     #[serde(skip)]
     pub inputs: Vec<usize>,
@@ -745,9 +779,10 @@ pub struct Circuit {
     #[serde(default)]
     wires: Vec<Wire>,
 }
-fn add_dep<'hm>(dependencies: &'hm mut HashMap<String, IC>, cid: &String, uri: &String) -> &'hm IC {
+/// returns true when added and false when already in hashmap
+fn add_dep<'hm>(dependencies: &'hm mut BTreeMap<String, IC>, cid: &String, uri: &String) -> bool {
     //let result: Option<&IC> = self.dependencies.get(cid);
-    dependencies.entry(cid.clone()).or_insert_with(|| {
+    if !dependencies.contains_key(cid) {
         //open URI
         match File::open(uri) {
             Err(e) => {
@@ -755,68 +790,112 @@ fn add_dep<'hm>(dependencies: &'hm mut HashMap<String, IC>, cid: &String, uri: &
             }
 
             Ok(f) => {
-                let c: IC = serde_json::from_reader(std::io::BufReader::new(f)).unwrap();
+                let c: IC = match serde_json::from_reader(std::io::BufReader::new(f)) {
+                    Err(e) => {
+                        panic!("Couldn't find URI:\"{}\"| {}", uri, e);
+                    }
+                    Ok(c) => c,
+                };
                 println!("adding {}({})", uri, cid);
-                c
+                dependencies.insert(cid.clone(), c);
+
+                //Some(&dependencies[cid])
+                true
             }
         }
-    })
-}
-//of IC
-fn set_instance(comp: &mut Node, dependencies: &mut HashMap<String, IC>) {
-    //let comp = self.components[i].clone();
-    let cid = comp.arguments.cid.as_ref().expect("cid");
-    let mut uri_result = comp.arguments.uri.as_ref();
-    let empty = "".to_string();
-    let uri = uri_result.get_or_insert(&empty);
-    let original = add_dep(dependencies, &cid, &uri);
-    let mut new = IC {
-        header: original.header.clone(),
-        components: Vec::with_capacity(original.components.len()),
-        inputs: Vec::with_capacity(comp.arguments.num_of_in.expect("num_of_in")),
-        outputs: Vec::with_capacity(comp.arguments.num_of_out.expect("num_of_out")),
-        wires: original.wires.clone(),
-    };
-    //individualy clone components
-    for comp in &original.components {
-        let mut new_comp = comp.clone();
-        new_comp.outputs = Rc::new(RefCell::new((*comp.outputs.try_borrow().unwrap()).clone()));
-        new.components.push(new_comp);
+    } else {
+        //None
+        false
     }
-    new.init_ic(dependencies);
-    comp.ic_instance = Some(new);
 }
 impl Circuit {
+    //go thru each dep and init (which will add more deps)
     fn add_deps(&mut self) {
         //URIs
         if let Ok(s) = std::fs::read_to_string("URIs.json") {
             self.uris = serde_json::from_str(&s).unwrap();
             println!("added URIs.json: {:?}", &self.uris);
         }
-        println!("deps:{:#?}", &self.dependencies);
         println!("add sub deps");
-        let mut needed: HashMap<String, String> = HashMap::new();
-        let mut added = 0;
-        let mut first = true;
-        while added != 0 || first {
-            first = false;
-            for dep in self.dependencies.values() {
+        //add ones from coomponents
+        self.components
+            .iter()
+            .filter(|c| c.node_type == NodeType::INTEGRATED_CIRCUIT)
+            .for_each(|comp| {
+                comp.ic_get_subdeps(&self.dependencies, &self.uris)
+                    .iter()
+                    .for_each(|(cid, name)| {
+                        add_dep(&mut self.dependencies, cid, name);
+                    });
+            });
+        //then add ones from deps
+        let mut need_init: Vec<String> = self.dependencies.keys().map(|k| k.clone()).collect();
+        while need_init.len() > 0 {
+            let mut adding = BTreeMap::new();
+            let mut new_need_init: Vec<String> = Vec::new();
+            for comp_cid in need_init.iter() {
+                let dep = self.dependencies.get(comp_cid).unwrap();
                 println!("dep:{}", &dep.header.name);
                 dep.components
                     .iter()
                     .filter(|c| c.node_type == NodeType::INTEGRATED_CIRCUIT)
-                    .for_each(|comp| comp.ic_add_deps(&self.dependencies, &mut needed, &self.uris));
+                    .for_each(|comp| {
+                        new_need_init.extend(
+                            comp.ic_get_subdeps(&self.dependencies, &self.uris)
+                                .iter()
+                                .filter(|(cid, _)| !self.dependencies.contains_key(cid.as_str()))
+                                .map(|(cid, name)| {
+                                    add_dep(&mut adding, cid, name);
+                                    cid.clone()
+                                }),
+                        );
+                    });
             }
-            self.components
+            self.dependencies.extend(adding);
+            need_init = new_need_init;
+        }
+        //should be y-sorter
+        for (_, dep) in self.dependencies.iter_mut() {
+            dep.components
+                .sort_by(|comp1, comp2| comp1.y.partial_cmp(&comp2.y).unwrap());
+        }
+        //now set all the ic instances
+        //TODO actually set_instance only in init_ic
+        /*
+        //every IC is a dep
+        for (_, dep) in self.dependencies.iter_mut() {
+            dep.components
                 .iter()
                 .filter(|c| c.node_type == NodeType::INTEGRATED_CIRCUIT)
-                .for_each(|comp| comp.ic_add_deps(&self.dependencies, &mut needed, &self.uris));
-            for (cid, uri) in needed.iter() {
-                println!("adding {}({})", uri, cid);
-                add_dep(&mut self.dependencies, &cid, &uri);
-            }
-            added = needed.len();
+                .for_each(|comp| {
+                    dep.subdeps
+                        .insert(comp.cid.clone().expect("IC to have CID"));
+                });
         }
+        let mut need: BTreeMap<String, BTreeSet<String>> = self
+            .dependencies
+            .iter()
+            .map(|(cid, ic)| (cid.clone(), ic.subdeps.clone()))
+            .collect();
+        let mut more = true;
+        while more {
+            more = false;
+            //loop thru deps
+            //if has no subdeps then set comps' instances
+            //loop thru subdeps
+            //if subdep has instance, then remove subdep from vec
+            let deps_clone: BTreeMap<String, IC> = self.dependencies.clone();
+            for (cid, _) in need.iter_mut().filter(|(_, subdeps)| subdeps.len() == 0) {
+                for comp in &mut self.dependencies.get_mut(cid).unwrap().components {
+                    comp.set_instance(&deps_clone);
+                }
+            }
+            need = need
+                .into_iter()
+                .filter(|(_, subdeps)| subdeps.len() > 0)
+                .collect();
+        }
+        */
     }
     fn connect(&mut self) {
         let mut ids = HashMap::new();
@@ -828,29 +907,50 @@ impl Circuit {
                 //find other comp
                 input.other_output = ids.get(&input.other_id).unwrap().clone();
             }
+            comp.input_states
+                .resize(comp.inputs.len(), InputState::default());
+            println!(
+                "resizing({:?}): input_states: {:?} inputs:{:?}",
+                &comp.node_type, &comp.input_states, &comp.inputs
+            );
         }
         //for new fromat with wires
         for wire in &self.wires {
-            self.components
+            let comp = self
+                .components
                 .iter_mut()
                 .find(|comp| comp.id == wire.to.0)
-                .unwrap()
-                .inputs
-                .push(Input {
-                    other_output: ids.get(&wire.from.0).unwrap().clone(),
-                    other_pin: wire.from.1,
-                    other_id: wire.from.0.clone(),
-                    in_pin: wire.to.1,
-                })
+                .unwrap();
+            comp.inputs.push(Input {
+                other_output: ids.get(&wire.from.0).unwrap().clone(),
+                other_pin: wire.from.1,
+                other_id: wire.from.0.clone(),
+                in_pin: wire.to.1,
+            });
+            comp.input_states
+                .resize(comp.inputs.len(), InputState::default());
+            println!(
+                "resizing({:?}): input_states: {:?} inputs:{:?}",
+                &comp.node_type, &comp.input_states, &comp.inputs
+            );
         }
     }
     pub fn init_circ(&mut self) {
-        //2: set outputs length by type
+        //1: sort components by y for io
+        self.components
+            .sort_by(|comp1, comp2| comp1.y.partial_cmp(&comp2.y).unwrap());
+        //2: init node output vecs
         for comp in &mut self.components {
             comp.init_output();
         }
         //add depependencies
         self.add_deps();
+        //init ic's (inclides settimg instamces)
+        let deps_clone = self.dependencies.clone();
+        for (_, ic) in self.components.iter_mut() {
+            ic.init_ic(&deps_clone);
+        }
+        //find io
         for i in 0..self.components.len() {
             let node_type = self.components[i].node_type.clone();
             if node_type == NodeType::PULSE_BUTTON || node_type == NodeType::TOGGLE_BUTTON {
@@ -860,25 +960,10 @@ impl Circuit {
             {
                 self.outputs.push(i);
             }
-            //also set instances
-            else if node_type == NodeType::INTEGRATED_CIRCUIT {
-                set_instance(&mut self.components[i], &mut self.dependencies);
-            }
         }
-        self.inputs.sort_by(|comp1, comp2| {
-            self.components[*comp1]
-                .y
-                .partial_cmp(&self.components[*comp2].y)
-                .unwrap()
-        });
-        self.outputs.sort_by(|comp1, comp2| {
-            self.components[*comp1]
-                .y
-                .partial_cmp(&self.components[*comp2].y)
-                .unwrap()
-        });
         //coonnect components
         self.connect();
+        println!("wires: {:?}", self.wires);
     }
     pub fn tick(&mut self) {
         for i in 0..self.components.len() {
