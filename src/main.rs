@@ -1,3 +1,6 @@
+use crate::sls::NodeType;
+use clap::{Parser, Subcommand};
+use core::panic;
 use std::str::FromStr;
 use std::sync::{
     mpsc,
@@ -6,9 +9,13 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use std::{io, thread};
 
-use crate::sls::NodeType;
-
 mod sls;
+mod types;
+
+enum CircType {
+    Custom,
+    Star8,
+}
 
 fn main() {
     println!("Hello, world!");
@@ -19,189 +26,36 @@ fn main() {
     //1: use serde
     let f = std::fs::File::open(filename).unwrap();
     let mut n: sls::Circuit = serde_json::from_reader(std::io::BufReader::new(f)).unwrap();
+
+    if let Some(ref arg) = args.next() {
+        match arg.as_str() {
+            "double" => {
+                let mem_re = regex::Regex::new(r"Memory \(\(d+) Byte\)").unwrap();
+                let str_num = mem_re.captures(&n.header.name).unwrap().get(1).unwrap().as_str();
+                let num_of_bytes:usize = usize::from_str(str_num).unwrap();
+                // TODO double Memory (256 Byte) aka RAM
+            }
+            unknown_arg => {
+                panic!("Unknown arg: {}",unknown_arg);
+            }
+        }
+    }
+
     //connect bits and stuff
     n.init_circ();
+    let circ_type = match n.header.id.0.as_str() {
+        "0282d111-5222-4675-80d7-69156904bf03" => CircType::Star8,
+        _ => CircType::Custom,
+    };
 
-    let mut paused: bool = true;
     let stdin_channel = spawn_stdin_channel();
-    //timing
-    let mut last_tick = Instant::now();
-    let target_tps: u64 = 20;
-    let target_dur = Duration::from_millis(1000 / target_tps);
-    'main: loop {
-        //target tps
-        let delta = last_tick - Instant::now();
-        if delta < target_dur {
-            std::thread::sleep(target_dur - delta);
+    match circ_type {
+        CircType::Star8 => {
+            types::star8::run(&mut n, stdin_channel);
         }
-        last_tick = Instant::now();
-
-        if !paused {
-            n.tick();
-        } else {
+        CircType::Custom => {
+            types::custom::run(&mut n, stdin_channel);
         }
-        match stdin_channel.try_recv() {
-            Ok(key) => {
-                //println!("Received: {}", key);
-                let removed = key.replace("\n", "");
-                let mut it = removed.split(' ');
-                match it.next() {
-                    Some(comm) => match comm {
-                        "q" => {
-                            break 'main;
-                        }
-                        "p" => {
-                            paused = !paused;
-                            println!("{}", if paused { "paused" } else { "unpaused" });
-                        }
-                        "t" => {
-                            n.tick();
-                        }
-                        "h" => {
-                            println!("hewro");
-                        }
-                        "o" => {
-                            println!("outputs:");
-                            for i in &n.outputs {
-                                let comp = &n.components[*i];
-                                match comp.node_type {
-                                    NodeType::LIGHT_BULB => {
-                                        print!("light");
-                                        match &comp.label {
-                                            Some(label) => {
-                                                println!("({})", label);
-                                            }
-                                            None => {}
-                                        }
-                                        let b: bool = comp.outputs.try_borrow().unwrap()[0];
-                                        println!(":{}\n", b);
-                                    }
-                                    NodeType::SEVEN_SEGMENT_DISPLAY_DECODER => {
-                                        print!("hex");
-                                        match &comp.label {
-                                            Some(label) => {
-                                                print!("({}) ", label);
-                                            }
-                                            None => {
-                                                print!("Display: ")
-                                            }
-                                        }
-                                        let mut num = 0;
-                                        for input in &comp.input_states {
-                                            if input.state {
-                                                num += 8 >> input.in_pin;
-                                            }
-                                        }
-                                        println!("{:x}", num);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        "i" => {
-                            println!("buttons:");
-                            for i in 0..n.inputs.len() {
-                                let comp = &n.components[n.inputs[i]];
-                                print!("{}:\t{:?}", i, n.components[n.inputs[i]].node_type);
-                                match &comp.label {
-                                    Some(label) => {
-                                        print!("({})", label);
-                                    }
-                                    None => {}
-                                }
-                                println!(
-                                    " - {:#?}\n",
-                                    n.components[n.inputs[i]].outputs.try_borrow().unwrap()[0]
-                                );
-                            }
-                        }
-                        "c" => match it.next() {
-                            Some(s) => match usize::from_str(s) {
-                                Ok(num) => {
-                                    let comp = &n.components[num];
-                                    //check if we have anotehr num
-                                    match it.next() {
-                                        Some(s) => match usize::from_str(s) {
-                                            Ok(num2) => {
-                                                //index into ic_instance
-                                                match &comp.ic_instance {
-                                                    Some(ic) => match ic.components.get(num2) {
-                                                        Some(inner_comp) => {
-                                                            println!("inner:{:#?}", inner_comp);
-                                                        }
-                                                        None => {
-                                                            for i in 0..ic.components.len() {
-                                                                println!(
-                                                                    "{} {:?}({:?})",
-                                                                    i,
-                                                                    &ic.components[i].node_type,
-                                                                    &ic.components[i].label
-                                                                );
-                                                            }
-                                                        }
-                                                    },
-                                                    None => {
-                                                        println!("component {} doesn't have an ic instance",num);
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                println!("parsing after c: {}", e);
-                                            }
-                                        },
-                                        None => {
-                                            println!("components:{:#?}\n", comp);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    println!("parsing after c: {}", e);
-                                }
-                            },
-                            None => {
-                                println!("expected switch num after c");
-                                for i in 0..n.components.len() {
-                                    println!(
-                                        "{} {:?}({:?})",
-                                        i, &n.components[i].node_type, &n.components[i].label
-                                    );
-                                }
-                            }
-                        },
-                        "s" => 's: {
-                            match it.next() {
-                                Some(s) => match usize::from_str(s) {
-                                    Ok(num) => {
-                                        if n.inputs.len() <= num {
-                                            println!("{} is isn't below {}", num, n.inputs.len());
-                                            break 's;
-                                        }
-                                        let comp_index = n.inputs[num];
-                                        let comp = &mut n.components[comp_index];
-                                        comp.next_outputs[0] = !comp.next_outputs[0];
-                                        println!("set {} to {}\n", num, comp.next_outputs[0]);
-                                    }
-                                    Err(e) => {
-                                        println!("parsing after s: {}", e);
-                                    }
-                                },
-                                None => {
-                                    println!("expected switch num after s");
-                                }
-                            };
-                        }
-                        _ => {
-                            println!("wot?");
-                        }
-                    },
-                    None => {
-                        println!("wot? gimmeh a command");
-                    }
-                }
-            }
-            Err(TryRecvError::Empty) => (),
-            Err(TryRecvError::Disconnected) => panic!("Channel disconnected"),
-        };
     }
 
     //println!("{:#?}", n);

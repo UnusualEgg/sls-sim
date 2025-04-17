@@ -54,7 +54,14 @@ fn none() -> Weak<RefCell<Vec<bool>>> {
 }
 
 #[derive(PartialEq, Clone, Debug, Eq, Hash, Default)]
-struct ID(String);
+pub struct ID(pub String);
+impl Serialize for ID {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+where
+        S: serde::Serializer {
+        self.0.serialize(serializer)
+    }
+}
 struct IDVisitor;
 use serde::de::{self, Error, Visitor};
 impl<'de> Visitor<'de> for IDVisitor {
@@ -65,26 +72,26 @@ impl<'de> Visitor<'de> for IDVisitor {
     }
 
     fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
-    where
+where
         E: de::Error,
     {
         Ok(ID((value).to_string()))
     }
     fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
-    where
+where
         E: de::Error,
     {
         Ok(ID((value).to_string()))
     }
 
     fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-    where
+where
         E: de::Error,
     {
         Ok(ID(value.to_string()))
     }
     fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
-    where
+where
         E: de::Error,
     {
         Ok(ID(value))
@@ -92,18 +99,18 @@ impl<'de> Visitor<'de> for IDVisitor {
 }
 impl<'de> Deserialize<'de> for ID {
     fn deserialize<D>(deserializer: D) -> Result<ID, D::Error>
-    where
+where
         D: Deserializer<'de>,
     {
         deserializer.deserialize_any(IDVisitor)
     }
 }
-#[derive(Deserialize, Debug, Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct InputState {
     pub state: bool,
     pub in_pin: usize,
 }
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize,Serialize, Clone)]
 struct Input {
     #[serde(skip, default = "none")]
     other_output: Weak<RefCell<Vec<bool>>>,
@@ -142,12 +149,12 @@ impl Debug for Input {
 fn default_outputs() -> Rc<RefCell<Vec<bool>>> {
     return Rc::new(RefCell::new(Vec::new()));
 }
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize,Serialize, Debug, Clone)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct Node {
     #[serde(rename = "TAG")]
     pub node_type: NodeType,
-    #[serde(default)]
+    #[serde(default,skip_serializing)]
     inputs: Vec<Input>,
     #[serde(skip)]
     pub input_states: Vec<InputState>,
@@ -159,13 +166,14 @@ pub struct Node {
     flip_flop: bool,
     id: ID,
     x: f32,
-    y: f32,
+    pub y: f32,
     pub label: Option<String>,
     enabled: Option<bool>,
     uri: Option<String>,
     cid: Option<String>,
     num_of_in: Option<usize>,
     num_of_out: Option<usize>,
+    size: Option<usize>,
 
     #[serde(skip)]
     pub ic_instance: Option<IC>,
@@ -184,21 +192,16 @@ impl Node {
         }
         let cid = self.cid.as_ref().expect("cid");
         let original = &dependencies[cid];
-        let mut new = IC {
-            header: original.header.clone(),
-            components: Vec::with_capacity(original.components.len()),
-            inputs: Vec::with_capacity(self.num_of_in.expect("num_of_in")),
-            outputs: Vec::with_capacity(self.num_of_out.expect("num_of_out")),
-            wires: original.wires.clone(),
-            subdeps: BTreeSet::new(),
-        };
-        //individualy clone components
-        for comp in &original.components {
-            let mut new_comp = comp.clone();
-            new_comp.outputs = Rc::new(RefCell::new((*comp.outputs.try_borrow().unwrap()).clone()));
-            new.components.push(new_comp);
+        let mut new = original.clone();
+        //go thru every ic and set instance recursively
+        for comp in new
+            .components
+            .iter_mut()
+            .filter(|node| node.node_type == NodeType::INTEGRATED_CIRCUIT)
+        {
+            comp.set_instance(&dependencies);
         }
-        new.init_ic(dependencies);
+        new.connect();
         self.ic_instance = Some(new);
     }
     #[must_use = "these are the deps needed"]
@@ -209,45 +212,55 @@ impl Node {
     ) -> HashMap<String, String> {
         let mut needed: HashMap<String, String> = HashMap::new();
         let cid = self.cid.as_ref().expect("cid");
-        let uri = match self.uri.as_ref() {
-            Some(uri) => uri,
-            //check if it's in URIs.json
-            None => match uris.get(cid) {
-                Some(uri) => uri,
-                None => {
-                    panic!(
-                        "Couldn't find dep(cid: {}) and no URI was provided\n {:#?}",
-                        cid, self
-                    );
-                }
-            },
-        };
-        if !dependencies.contains_key(cid) {
-            needed.insert(cid.clone(), uri.clone());
-            println!("needed {}", uri);
+        let uri = self.uri.as_ref();
+        //let uri = match self.uri.as_ref() {
+        //    Some(uri) => uri,
+        //    //check if it's in URIs.json
+        //    None => match uris.get(cid) {
+        //        Some(uri) => uri,
+        //        None => {
+        //            panic!(
+        //                "Couldn't find dep(cid: {}) and no URI was provided\n {:#?}",
+        //                cid, self
+        //            );
+        //        }
+        //    },
+        //};
+        if let Some(uri) = uri {
+
+            if !dependencies.contains_key(cid) {
+                needed.insert(cid.clone(), uri.clone());
+                println!("needed {}", uri);
+            }
         }
         needed
     }
     fn init_output(&mut self) {
-        let output_n = match self.node_type {
-            NodeType::INTEGRATED_CIRCUIT => {
-                let num_of_out = self.num_of_out.expect("num_of_out");
-                println!(
-                    "{} outputs for {}",
-                    num_of_out,
-                    self.label.as_ref().get_or_insert(&"IC".to_string())
-                );
-                num_of_out
+        let output_n = match self.num_of_out {
+            Some(n) => n,
+            None => {
+                match self.node_type {
+                    NodeType::INTEGRATED_CIRCUIT => {
+                        let num_of_out = self.num_of_out.expect("num_of_out");
+                        println!(
+                            "{} outputs for {}",
+                            num_of_out,
+                            self.label.as_ref().get_or_insert(&"IC".to_string())
+                        );
+                        num_of_out
+                    }
+                    NodeType::DEMUX => self.size.expect("size of demux"),
+                    NodeType::SEVEN_SEGMENT_DISPLAY_DECODER => 7,
+                    NodeType::SEVEN_SEGMENT_DISPLAY => 0,
+                    //Q ~Q
+                    NodeType::D_FLIP_FLOP
+                    | NodeType::SR_LATCH
+                    | NodeType::JK_FLIP_FLOP
+                    | NodeType::SR_FLIP_FLOP
+                    | NodeType::T_FLIP_FLOP => 2,
+                    _ => 1,
+                }
             }
-            NodeType::SEVEN_SEGMENT_DISPLAY_DECODER => 7,
-            NodeType::SEVEN_SEGMENT_DISPLAY => 0,
-            //Q ~Q
-            NodeType::D_FLIP_FLOP
-            | NodeType::SR_LATCH
-            | NodeType::JK_FLIP_FLOP
-            | NodeType::SR_FLIP_FLOP
-            | NodeType::T_FLIP_FLOP => 2,
-            _ => 1,
         };
         let mut outputs = self.outputs.borrow_mut();
         outputs.resize(output_n, false);
@@ -330,6 +343,13 @@ impl Node {
                 }
                 self.next_outputs[0] = out;
             }
+            NodeType::XNOR_GATE => {
+                let mut out = true;
+                for input in &self.input_states {
+                    out ^= input.state;
+                }
+                self.next_outputs[0] = !out;
+            }
             NodeType::NOR_GATE => {
                 let mut out = false;
                 for input in &self.input_states {
@@ -350,6 +370,32 @@ impl Node {
                     out = input.state;
                 }
                 self.next_outputs[0] = out;
+            }
+            NodeType::DEMUX => {
+                // order is sx-s0 then in
+                let size = self.size.expect("size");
+                let in_len = size.trailing_zeros() as usize;
+                let mut pins = vec![false; in_len];
+                let mut on = false;
+
+                for input in &self.input_states {
+                    if input.in_pin == in_len {
+                        on = input.state;
+                    } else {
+                        pins[input.in_pin] = input.state;
+                    }
+                }
+                let mut n = 0;
+                pins.reverse();
+                for i in 0..in_len {
+                    n |= pins[i] as u8 >> i;
+                }
+                for i in &mut self.next_outputs {
+                    *i = false;
+                }
+                self.next_outputs[n as usize] = on;
+
+                //TODO
             }
             NodeType::CLOCK => {
                 let now = Instant::now();
@@ -374,9 +420,9 @@ impl Node {
                 for input in &self.input_states {
                     /*
                     println!(
-                        "getting {:?} for {}",
-                        input,
-                        self.label.as_ref().unwrap_or(&"IC".to_string())
+                    "getting {:?} for {}",
+                    input,
+                    self.label.as_ref().unwrap_or(&"IC".to_string())
                     );
                     */
                     let out: bool = input.state;
@@ -384,8 +430,8 @@ impl Node {
                     instance.components[comp_index].next_outputs[0] = out;
                     /*
                     println!(
-                        "next_output {:?}\tset to {} from {}",
-                        instance.components[comp_index].node_type, out, self.y
+                    "next_output {:?}\tset to {} from {}",
+                    instance.components[comp_index].node_type, out, self.y
                     );
                     */
                 }
@@ -538,19 +584,6 @@ impl Node {
         if let Some(instance) = &mut self.ic_instance.as_mut() {
             for comp in &mut instance.components {
                 comp.update_output();
-                /*
-                if comp.node_type == NodeType::PULSE_BUTTON
-                    || comp.node_type == NodeType::TOGGLE_BUTTON
-                {
-                    println!(
-                        "update {:?}\t{:?} < {:?} from {}",
-                        comp.node_type,
-                        comp.outputs.try_borrow().unwrap(),
-                        comp.next_outputs,
-                        self.y
-                    );
-                }
-                // */
             }
         }
     }
@@ -586,7 +619,7 @@ struct WireID(ID, usize);
 
 impl<'de> Deserialize<'de> for WireID {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
+where
         D: Deserializer<'de>,
     {
         deserializer.deserialize_string(WireIDVisitor)
@@ -606,7 +639,7 @@ impl std::fmt::Display for WireError {
 }
 impl de::Error for WireError {
     fn custom<T>(msg: T) -> Self
-    where
+where
         T: std::fmt::Display,
     {
         print!("WireError: {}", msg);
@@ -624,19 +657,19 @@ impl<'de> Visitor<'de> for WireIDVisitor {
     }
 
     fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
-    where
+where
         E: Error,
     {
         self.visit_str(&v)
     }
     fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
-    where
+where
         E: Error,
     {
         self.visit_str(v)
     }
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-    where
+where
         E: Error,
     {
         let mut iter = v.split(':');
@@ -723,20 +756,18 @@ impl IC {
             });
             comp.input_states
                 .resize(comp.inputs.len(), InputState::default());
-            println!(
-                "resizing({:?}): input_states: {:?} inputs:{:?}",
-                &comp.node_type, &comp.input_states, &comp.inputs
-            );
+            /*println!(
+            "resizing({:?}): input_states: {:?} inputs:{:?}",
+            &comp.node_type, &comp.input_states, &comp.inputs
+            );*/
         }
     }
-    //get input indecies
-    fn init_ic(&mut self, deps: &BTreeMap<String, IC>) {
+    fn init_ic(&mut self) {
         sort_comps(&mut self.components);
         for comp in self.components.iter_mut() {
             comp.init_output();
         }
-        self.connect();
-        for comp in self.components {
+        for (i, comp) in self.components.iter().enumerate() {
             //init input indecies Vec
             if comp.node_type == NodeType::PULSE_BUTTON || comp.node_type == NodeType::TOGGLE_BUTTON
             {
@@ -745,18 +776,16 @@ impl IC {
                 self.outputs.push(i);
             }
         }
-        for comp in &mut self.components {
-            comp.set_instance(&deps);
-        }
     }
 }
 #[derive(Deserialize, Default, Debug)]
 #[serde(rename_all = "UPPERCASE")]
-struct Header {
+pub struct Header {
+    pub name: String,
     app_version: usize,
     #[serde(default)]
-    id: ID,
-    #[serde(rename = "TYPE", default)]
+    pub id: ID,
+    #[serde(rename = "TYPE", default,skip_serializing)]
     circ_type: CircuitType,
 }
 
@@ -765,7 +794,7 @@ struct Header {
 pub struct Circuit {
     #[serde(skip)]
     uris: HashMap<String, String>,
-    header: Header,
+    pub header: Header,
     pub components: Vec<Node>,
     #[serde(default)]
     dependencies: BTreeMap<String, IC>,
@@ -864,36 +893,36 @@ impl Circuit {
         /*
         //every IC is a dep
         for (_, dep) in self.dependencies.iter_mut() {
-            dep.components
-                .iter()
-                .filter(|c| c.node_type == NodeType::INTEGRATED_CIRCUIT)
-                .for_each(|comp| {
-                    dep.subdeps
-                        .insert(comp.cid.clone().expect("IC to have CID"));
-                });
+        dep.components
+        .iter()
+        .filter(|c| c.node_type == NodeType::INTEGRATED_CIRCUIT)
+        .for_each(|comp| {
+        dep.subdeps
+        .insert(comp.cid.clone().expect("IC to have CID"));
+        });
         }
         let mut need: BTreeMap<String, BTreeSet<String>> = self
-            .dependencies
-            .iter()
-            .map(|(cid, ic)| (cid.clone(), ic.subdeps.clone()))
-            .collect();
+        .dependencies
+        .iter()
+        .map(|(cid, ic)| (cid.clone(), ic.subdeps.clone()))
+        .collect();
         let mut more = true;
         while more {
-            more = false;
-            //loop thru deps
-            //if has no subdeps then set comps' instances
-            //loop thru subdeps
-            //if subdep has instance, then remove subdep from vec
-            let deps_clone: BTreeMap<String, IC> = self.dependencies.clone();
-            for (cid, _) in need.iter_mut().filter(|(_, subdeps)| subdeps.len() == 0) {
-                for comp in &mut self.dependencies.get_mut(cid).unwrap().components {
-                    comp.set_instance(&deps_clone);
-                }
-            }
-            need = need
-                .into_iter()
-                .filter(|(_, subdeps)| subdeps.len() > 0)
-                .collect();
+        more = false;
+        //loop thru deps
+        //if has no subdeps then set comps' instances
+        //loop thru subdeps
+        //if subdep has instance, then remove subdep from vec
+        let deps_clone: BTreeMap<String, IC> = self.dependencies.clone();
+        for (cid, _) in need.iter_mut().filter(|(_, subdeps)| subdeps.len() == 0) {
+        for comp in &mut self.dependencies.get_mut(cid).unwrap().components {
+        comp.set_instance(&deps_clone);
+        }
+        }
+        need = need
+        .into_iter()
+        .filter(|(_, subdeps)| subdeps.len() > 0)
+        .collect();
         }
         */
     }
@@ -946,9 +975,16 @@ impl Circuit {
         //add depependencies
         self.add_deps();
         //init ic's (inclides settimg instamces)
+        for (_, ic) in self.dependencies.iter_mut() {
+            ic.init_ic();
+        }
         let deps_clone = self.dependencies.clone();
-        for (_, ic) in self.components.iter_mut() {
-            ic.init_ic(&deps_clone);
+        for comp in self
+            .components
+            .iter_mut()
+            .filter(|node| node.node_type == NodeType::INTEGRATED_CIRCUIT)
+        {
+            comp.set_instance(&deps_clone);
         }
         //find io
         for i in 0..self.components.len() {
@@ -956,7 +992,7 @@ impl Circuit {
             if node_type == NodeType::PULSE_BUTTON || node_type == NodeType::TOGGLE_BUTTON {
                 self.inputs.push(i);
             } else if node_type == NodeType::LIGHT_BULB
-                || node_type == NodeType::SEVEN_SEGMENT_DISPLAY_DECODER
+            || node_type == NodeType::SEVEN_SEGMENT_DISPLAY_DECODER
             {
                 self.outputs.push(i);
             }
