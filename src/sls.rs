@@ -150,6 +150,7 @@ impl Debug for Input {
 fn default_outputs() -> Rc<RefCell<Vec<bool>>> {
     return Rc::new(RefCell::new(Vec::new()));
 }
+fn u64_iszero(num:&u64) -> bool {num==&0}
 #[derive(Deserialize,Serialize, Debug, Clone,Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct Node {
@@ -168,17 +169,24 @@ pub struct Node {
     id: ID,
     x: f32,
     pub y: f32,
+    #[serde(skip_serializing_if="Option::is_none")]
     pub label: Option<String>,
+    #[serde(skip_serializing_if="Option::is_none")]
     enabled: Option<bool>,
+    #[serde(skip_serializing_if="Option::is_none")]
     uri: Option<String>,
+    #[serde(skip_serializing_if="Option::is_none")]
     cid: Option<String>,
+    #[serde(skip_serializing_if="Option::is_none")]
     num_of_in: Option<usize>,
+    #[serde(skip_serializing_if="Option::is_none")]
     num_of_out: Option<usize>,
+    #[serde(skip_serializing_if="Option::is_none")]
     size: Option<usize>,
 
     #[serde(skip)]
     pub ic_instance: Option<IC>,
-    #[serde(default)]
+    #[serde(default,skip_serializing_if="u64_iszero")]
     pub period: u64,
     #[serde(skip)]
     pub last_cycle: Option<Instant>,
@@ -843,7 +851,7 @@ pub struct Circuit {
 impl Circuit {
     pub fn new(name:String,id:String,components: Vec<Node>,wires:Vec<Wire>) -> Self {
         Circuit {
-            header: Header { name, app_version: 173, id: ID(id), circ_type: CircuitType::Project },
+            header: Header { name, app_version: 158, id: ID(id), circ_type: CircuitType::Project },
             components,
             wires,
             ..Default::default()

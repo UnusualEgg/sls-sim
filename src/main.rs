@@ -29,22 +29,23 @@ fn main() {
     if let Some(ref arg) = args.next() {
         match arg.as_str() {
             "rom" => {
-                let filename = args.next().expect("expected rom file");
-                let mut buf:String=String::new();
-                let mut f = std::fs::File::open(&filename).unwrap().read_to_string(&mut buf);
+                let filename_rom = args.next().expect("expected rom file");
+                let mut buf:Vec<u8>=Vec::new();
+                std::fs::File::open(&filename_rom).unwrap().read_to_end(&mut buf).unwrap();
                 let len = buf.len();
 
                 let mut id:usize = 0;
 
                 //aka log base 2
                 let mut addr_lines = len.next_power_of_two().trailing_zeros() as usize;
+                println!("addr_lines: {}",addr_lines);
 
                 //make input and output
                 let mut inputs:Vec<sls::Node> = Vec::with_capacity(addr_lines as usize);
-                for n in 0..addr_lines {
+                for n in 0..(addr_lines+1) {
                     inputs.push(
                         {
-                            let button = sls::Node::new(NodeType::TOGGLE_BUTTON, Some(n.to_string()), id.to_string());
+                            let button = sls::Node::new(NodeType::TOGGLE_BUTTON, Some(n.to_string()), id.to_string()).at(-20.0, n as f32 * 10.0);
                             id+=1;
                             button
                         }
@@ -56,46 +57,52 @@ fn main() {
                 for n in 0..BITWIDTH {
                     outputs.push(
                         {
-                            let light = sls::Node::new(NodeType::LIGHT_BULB, Some(n.to_string()), id.to_string());
+                            let light = sls::Node::new(NodeType::LIGHT_BULB, Some(n.to_string()), id.to_string()).at(20.0, n as f32 * 10.0);
                             id+=1;
                             light
                         }
                     )
                 }
-                //add mux
-                let mux1 = sls::Node::new(NodeType::TOGGLE_BUTTON, None, id.to_string());
-                id+=1;
                 //need to make this a vec
                 let mut muxes: Vec<Vec<sls::Node>> = Vec::new();
-                muxes.push(vec![mux1]);
+                //add mux
+                //let mut mux1 = sls::Node::new(NodeType::MUX, None, id.to_string());
+                //let new_addr_lines:usize = if addr_lines<4 {addr_lines} else {4};
+                //let size = 2usize.pow(new_addr_lines as u32);
+                //mux1.set_size(size);
+                //id+=1;
+                //muxes.push(vec![mux1]);
 
 
                 //for loop
                 let backup = addr_lines;
                 let mut num_of_muxes:Vec<usize> = Vec::new();
 
-                let new_addr_lines:usize = if addr_lines<4 {addr_lines} else {4};
-                num_of_muxes.push(new_addr_lines);
-                addr_lines-=new_addr_lines;
-                while addr_lines>0 {
-                    let new_addr_lines:usize = if addr_lines<4 {addr_lines} else {4};
-                    num_of_muxes.push(new_addr_lines);
+                //actually we can just start left to right
+                //ignore what type of input is left
+                //only check how many inputs
+                //start with addr_lines
+                let mut num_of_inputs = addr_lines;
+                while num_of_inputs.trailing_zeros()>0 {
+                    let num = num_of_inputs.trailing_zeros() as usize;
+                    num_of_muxes.push(num);
+                    num_of_inputs=num;
+                    //let new_addr_lines:usize = if addr_lines<=4 {addr_lines} else {4};
+                    //num_of_muxes.push(new_addr_lines);
 
-                    if addr_lines-new_addr_lines==0 {
-                        break;
-                    }
-                    let mut n = num_of_muxes.len()-2;
-                    while n>=0 {
-                        n=num_of_muxes[n+1];
-                        n-=1;
-                    }
+                    //addr_lines-=new_addr_lines;
+                    //let mut n = num_of_muxes.len()-2;
+                    //while n>0 {
+                    //    n=num_of_muxes[n+1];
+                    //    n-=1;
+                    //}
 
-                    addr_lines-=new_addr_lines;
                 }
+                println!("num_of_muxes: {:?}",num_of_muxes);
                 addr_lines=backup;
                 for n in num_of_muxes {
                     let mut v = Vec::with_capacity(n);
-                    let new_addr_lines:usize = if addr_lines<4 {addr_lines} else {4};
+                    let new_addr_lines:usize = if addr_lines<=4 {addr_lines} else {4};
                     let size = 2usize.pow(new_addr_lines as u32);
                     for _ in 0..n {
                         v.push(
@@ -112,7 +119,6 @@ fn main() {
                 }
                 //now connect
                 let mut wires:Vec<sls::Wire> = Vec::new();
-                addr_lines=backup;
 
 
                 //connect addr lines
@@ -124,7 +130,8 @@ fn main() {
                     for (num_addr_lines,id) in iter {
                         size=num_addr_lines;
                         for addr_line in 0..num_addr_lines {
-                            wires.push(sls::Wire::new(inputs[(button_n+addr_line)as usize].get_id().clone(), 0, id.clone(), addr_line as usize));
+                            //TODO button+addr_line
+                            wires.push(sls::Wire::new(inputs[(button_n+addr_line)as usize].get_id().clone(), 0, id.clone(), (num_addr_lines-addr_line-1) as usize));
                         }
                     }
                     button_n+=size;
@@ -147,16 +154,16 @@ fn main() {
                 //conenct ligth bulbs to muxes
                 //create circ
                 let mut components:Vec<sls::Node>=Vec::with_capacity(inputs.len()+outputs.len()+muxes.len());
-                let mut muxes_comp = muxes.concat();
+                let muxes_comp = muxes.concat();
                 components.extend(muxes_comp);
                 components.extend(inputs);
                 components.extend(outputs);
                 //let mut components:Vec<sls::Node>=[muxes,inputs,outputs].iter().flatten();
                 
                 let circ = sls::Circuit::new("Rom".to_string(), "ROM".to_string(), components, wires);
-                let out_str = serde_json::to_string(&circ).unwrap();
-                let mut f = std::fs::OpenOptions::new().write(true).open(&filename).unwrap();
-                f.write(out_str.as_str().as_bytes());
+                let out_str = serde_json::to_string_pretty(&circ).unwrap();
+                let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(&filename).unwrap();
+                f.write(out_str.as_str().as_bytes()).unwrap();
 
 
             }
