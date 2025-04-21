@@ -1,4 +1,4 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
@@ -8,9 +8,10 @@ use std::str::FromStr;
 use std::time::Instant;
 
 #[allow(non_camel_case_types)]
-#[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Clone,Default)]
 pub enum NodeType {
     PULSE_BUTTON,
+    #[default]
     TOGGLE_BUTTON,
     LIGHT_BULB,
     NOTE,
@@ -149,7 +150,7 @@ impl Debug for Input {
 fn default_outputs() -> Rc<RefCell<Vec<bool>>> {
     return Rc::new(RefCell::new(Vec::new()));
 }
-#[derive(Deserialize,Serialize, Debug, Clone)]
+#[derive(Deserialize,Serialize, Debug, Clone,Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct Node {
     #[serde(rename = "TAG")]
@@ -184,6 +185,25 @@ pub struct Node {
 }
 
 impl Node {
+    pub fn new(node_type: NodeType, label: Option<String>,id:String) -> Node {
+        Node {node_type,label,id:ID(id),..Default::default()}
+
+    }
+    pub fn at(self,x:f32,y:f32) -> Self {
+        let mut n = self;
+        n.x=x;
+        n.y=y;
+        n
+    }
+    pub fn get_id(&self) -> &ID {
+        &self.id
+    }
+    pub fn get_size(&self)->Option<usize> {
+        self.size
+    }
+    pub fn set_size(&mut self,size:usize) {
+        self.size=Some(size);
+    }
     //of IC
     fn set_instance(&mut self, dependencies: &BTreeMap<String, IC>) {
         //let comp = self.components[i].clone();
@@ -596,7 +616,7 @@ enum CircuitType {
     #[default]
     Ic,
 }
-#[derive(Deserialize, Default, Debug, Clone)]
+#[derive(Deserialize,Serialize, Default, Debug, Clone)]
 #[serde(rename_all = "UPPERCASE")]
 struct ICHeader {
     app_version: usize,
@@ -607,12 +627,17 @@ struct ICHeader {
     id: String,
 }
 
-#[derive(Deserialize, Debug, Clone)]
-struct Wire {
+#[derive(Deserialize,Serialize, Debug, Clone)]
+pub struct Wire {
     #[serde(rename = "S")]
     to: WireID,
     #[serde(rename = "E")]
     from: WireID,
+}
+impl Wire {
+    pub fn new(from:ID,from_out:usize,to:ID,to_in:usize) -> Wire {
+        Wire { from: WireID(from,from_out), to: WireID(to,to_in) }
+    }
 }
 #[derive(PartialEq, Clone, Debug, Eq, Hash, Default)]
 struct WireID(ID, usize);
@@ -623,6 +648,13 @@ where
         D: Deserializer<'de>,
     {
         deserializer.deserialize_string(WireIDVisitor)
+    }
+}
+impl Serialize for WireID {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer {
+        serializer.serialize_str(&format!("{}:{}",self.0.0,self.1))
     }
 }
 #[derive(Debug)]
@@ -708,7 +740,7 @@ where
 fn sort_comps(components: &mut Vec<Node>) {
     components.sort_by(|comp1, comp2| comp1.y.total_cmp(&comp2.y));
 }
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize,Serialize, Debug, Clone)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct IC {
     header: ICHeader,
@@ -778,7 +810,7 @@ impl IC {
         }
     }
 }
-#[derive(Deserialize, Default, Debug)]
+#[derive(Deserialize,Serialize, Default, Debug)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct Header {
     pub name: String,
@@ -789,7 +821,7 @@ pub struct Header {
     circ_type: CircuitType,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize,Serialize, Debug,Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct Circuit {
     #[serde(skip)]
@@ -807,6 +839,17 @@ pub struct Circuit {
     tick_count: u64,
     #[serde(default)]
     wires: Vec<Wire>,
+}
+impl Circuit {
+    pub fn new(name:String,id:String,components: Vec<Node>,wires:Vec<Wire>) -> Self {
+        Circuit {
+            header: Header { name, app_version: 173, id: ID(id), circ_type: CircuitType::Project },
+            components,
+            wires,
+            ..Default::default()
+        }
+
+    }
 }
 /// returns true when added and false when already in hashmap
 fn add_dep<'hm>(dependencies: &'hm mut BTreeMap<String, IC>, cid: &String, uri: &String) -> bool {
