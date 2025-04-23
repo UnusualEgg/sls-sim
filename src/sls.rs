@@ -6,6 +6,7 @@ use std::fs::File;
 use std::rc::{Rc, Weak};
 use std::str::FromStr;
 use std::time::Instant;
+use std::usize;
 
 #[allow(non_camel_case_types)]
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone,Default)]
@@ -278,6 +279,7 @@ impl Node {
                         num_of_out
                     }
                     NodeType::DEMUX => self.size.expect("size of demux"),
+                    NodeType::HALF_ADDER | NodeType::FULL_ADDER=> 2,
                     NodeType::SEVEN_SEGMENT_DISPLAY_DECODER => 7,
                     NodeType::SEVEN_SEGMENT_DISPLAY => 0,
                     //Q ~Q
@@ -322,8 +324,10 @@ impl Node {
                         "{:#?}[pin: {}] id:{}",
                         o, input.other_pin, &input.other_id.0
                     );
+                    default
+                } else {
+                    o[input.other_pin]
                 }
-                o[input.other_pin]
             }
             None => default,
         }
@@ -399,31 +403,81 @@ impl Node {
                 }
                 self.next_outputs[0] = out;
             }
+            NodeType::HALF_ADDER => {
+                let mut a = false;
+                let mut b = false;
+                for input in &self.input_states {
+                    match input.in_pin {
+                        0 => a=input.state,
+                        1 => b=input.state,
+                        _=> (),
+                    }
+                }
+                self.next_outputs[0] = a ^ b;
+                self.next_outputs[1] = a && b;
+            }
+            NodeType::FULL_ADDER => {
+                let mut a = false;
+                let mut b = false;
+                let mut c = false;
+                for input in &self.input_states {
+                    match input.in_pin {
+                        0 => a=input.state,
+                        1 => b=input.state,
+                        2 => c=input.state,
+                        _=> (),
+                    }
+                }
+                self.next_outputs[0] = a ^ b ^ c;
+                self.next_outputs[1] = (a&&b)||((a^b)&&c);
+            }
             NodeType::DEMUX => {
                 // order is sx-s0 then in
                 let size = self.size.expect("size");
-                let in_len = size.trailing_zeros() as usize;
-                let mut pins = vec![false; in_len];
+                let num_addr_pins = size.trailing_zeros() as usize;
+                let mut pins = vec![false; num_addr_pins];
                 let mut on = false;
 
                 for input in &self.input_states {
-                    if input.in_pin == in_len {
+                    if input.in_pin == num_addr_pins {
                         on = input.state;
                     } else {
                         pins[input.in_pin] = input.state;
                     }
                 }
                 let mut n = 0;
-                pins.reverse();
-                for i in 0..in_len {
-                    n |= pins[i] as u8 >> i;
+                let rev_pins = pins.iter().rev();
+                for (i,pin) in rev_pins.enumerate() {
+                    n |= *pin as u8 >> i;
                 }
                 for i in &mut self.next_outputs {
                     *i = false;
                 }
                 self.next_outputs[n as usize] = on;
+            }
+            NodeType::MUX => {
+                // order is sx-s0 then in
+                let size = self.size.expect("size");
+                let num_addr_pins = size.trailing_zeros() as usize;
+                let mut pins = vec![false; num_addr_pins];
+                let mut input_pins = vec![false; size];
 
-                //TODO
+                for input in &self.input_states {
+                    if input.in_pin < num_addr_pins {
+                        pins[input.in_pin] = input.state;
+                    } else {
+                        input_pins[input.in_pin-(num_addr_pins)] = input.state;
+                    }
+                }
+                let mut n = 0;
+                let rev_pins = pins.iter().rev();
+                for (i,pin) in rev_pins.enumerate() {
+                    n |= *pin as u8 >> i;
+                }
+                for i in &mut self.next_outputs {
+                    *i = false;
+                }
+                self.next_outputs[0] = input_pins[n as usize];
             }
             NodeType::CLOCK => {
                 let now = Instant::now();
