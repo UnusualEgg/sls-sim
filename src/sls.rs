@@ -9,7 +9,7 @@ use std::time::Instant;
 use std::usize;
 
 #[allow(non_camel_case_types)]
-#[derive(Deserialize, Serialize, Debug, PartialEq, Clone,Default)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Clone, Default)]
 pub enum NodeType {
     PULSE_BUTTON,
     #[default]
@@ -59,8 +59,9 @@ fn none() -> Weak<RefCell<Vec<bool>>> {
 pub struct ID(pub String);
 impl Serialize for ID {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-where
-        S: serde::Serializer {
+    where
+        S: serde::Serializer,
+    {
         self.0.serialize(serializer)
     }
 }
@@ -74,26 +75,26 @@ impl<'de> Visitor<'de> for IDVisitor {
     }
 
     fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
-where
+    where
         E: de::Error,
     {
         Ok(ID((value).to_string()))
     }
     fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
-where
+    where
         E: de::Error,
     {
         Ok(ID((value).to_string()))
     }
 
     fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-where
+    where
         E: de::Error,
     {
         Ok(ID(value.to_string()))
     }
     fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
-where
+    where
         E: de::Error,
     {
         Ok(ID(value))
@@ -101,7 +102,7 @@ where
 }
 impl<'de> Deserialize<'de> for ID {
     fn deserialize<D>(deserializer: D) -> Result<ID, D::Error>
-where
+    where
         D: Deserializer<'de>,
     {
         deserializer.deserialize_any(IDVisitor)
@@ -112,7 +113,7 @@ pub struct InputState {
     pub state: bool,
     pub in_pin: usize,
 }
-#[derive(Deserialize,Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 struct Input {
     #[serde(skip, default = "none")]
     other_output: Weak<RefCell<Vec<bool>>>,
@@ -151,13 +152,40 @@ impl Debug for Input {
 fn default_outputs() -> Rc<RefCell<Vec<bool>>> {
     return Rc::new(RefCell::new(Vec::new()));
 }
-fn u64_iszero(num:&u64) -> bool {num==&0}
-#[derive(Deserialize,Serialize, Debug, Clone,Default)]
+fn u64_iszero(num: &u64) -> bool {
+    num == &0
+}
+
+#[derive(Debug)]
+struct InputError {
+    id: ID,
+    pin: usize,
+}
+#[derive(Debug)]
+enum NodeErrorType {
+    Input(InputError),
+}
+#[derive(Debug)]
+struct NodeError {
+    t: NodeErrorType,
+}
+impl std::fmt::Display for NodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.t {
+            NodeErrorType::Input(i) => {
+                f.write_fmt(format_args!("ID:{} is missing out pin {}", i.id.0, i.pin))
+            }
+        }
+    }
+}
+impl std::error::Error for NodeError {}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct Node {
     #[serde(rename = "TAG")]
     pub node_type: NodeType,
-    #[serde(default,skip_serializing)]
+    #[serde(default, skip_serializing)]
     inputs: Vec<Input>,
     #[serde(skip)]
     pub input_states: Vec<InputState>,
@@ -170,48 +198,52 @@ pub struct Node {
     id: ID,
     x: f32,
     pub y: f32,
-    #[serde(skip_serializing_if="Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    #[serde(skip_serializing_if="Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
-    #[serde(skip_serializing_if="Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     uri: Option<String>,
-    #[serde(skip_serializing_if="Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     cid: Option<String>,
-    #[serde(skip_serializing_if="Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     num_of_in: Option<usize>,
-    #[serde(skip_serializing_if="Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     num_of_out: Option<usize>,
-    #[serde(skip_serializing_if="Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     size: Option<usize>,
 
     #[serde(skip)]
     pub ic_instance: Option<IC>,
-    #[serde(default,skip_serializing_if="u64_iszero")]
+    #[serde(default, skip_serializing_if = "u64_iszero")]
     pub period: u64,
     #[serde(skip)]
     pub last_cycle: Option<Instant>,
 }
 
 impl Node {
-    pub fn new(node_type: NodeType, label: Option<String>,id:String) -> Node {
-        Node {node_type,label,id:ID(id),..Default::default()}
-
+    pub fn new(node_type: NodeType, label: Option<String>, id: String) -> Node {
+        Node {
+            node_type,
+            label,
+            id: ID(id),
+            ..Default::default()
+        }
     }
-    pub fn at(self,x:f32,y:f32) -> Self {
+    pub fn at(self, x: f32, y: f32) -> Self {
         let mut n = self;
-        n.x=x;
-        n.y=y;
+        n.x = x;
+        n.y = y;
         n
     }
     pub fn get_id(&self) -> &ID {
         &self.id
     }
-    pub fn get_size(&self)->Option<usize> {
+    pub fn get_size(&self) -> Option<usize> {
         self.size
     }
-    pub fn set_size(&mut self,size:usize) {
-        self.size=Some(size);
+    pub fn set_size(&mut self, size: usize) {
+        self.size = Some(size);
     }
     //of IC
     fn set_instance(&mut self, dependencies: &BTreeMap<String, IC>) {
@@ -256,7 +288,6 @@ impl Node {
         //    },
         //};
         if let Some(uri) = uri {
-
             if !dependencies.contains_key(cid) {
                 needed.insert(cid.clone(), uri.clone());
                 println!("needed {}", uri);
@@ -279,7 +310,7 @@ impl Node {
                         num_of_out
                     }
                     NodeType::DEMUX => self.size.expect("size of demux"),
-                    NodeType::HALF_ADDER | NodeType::FULL_ADDER=> 2,
+                    NodeType::HALF_ADDER | NodeType::FULL_ADDER => 2,
                     NodeType::SEVEN_SEGMENT_DISPLAY_DECODER => 7,
                     NodeType::SEVEN_SEGMENT_DISPLAY => 0,
                     //Q ~Q
@@ -315,7 +346,7 @@ impl Node {
         //also input_states
         //println!("inputs:{:#?} for {:?}", &self.inputs, self.node_type);
     }
-    fn get_input(&self, input: &Input, default: bool) -> bool {
+    fn get_input(&self, input: &Input, default: bool) -> Result<bool, NodeError> {
         match input.other_output.upgrade() {
             Some(x) => {
                 let o = (&x).try_borrow().unwrap();
@@ -324,15 +355,20 @@ impl Node {
                         "{:#?}[pin: {}] id:{}",
                         o, input.other_pin, &input.other_id.0
                     );
-                    default
+                    Err(NodeError {
+                        t: NodeErrorType::Input(InputError {
+                            id: input.other_id.clone(),
+                            pin: input.other_pin,
+                        }),
+                    })
                 } else {
-                    o[input.other_pin]
+                    Ok(o[input.other_pin])
                 }
             }
-            None => default,
+            None => Ok(default),
         }
     }
-    fn get_inputs(&mut self) {
+    fn get_inputs(&mut self) -> Result<(), NodeError> {
         let default = match &self.node_type {
             NodeType::AND_GATE | NodeType::NOR_GATE => true,
             _ => false,
@@ -340,9 +376,10 @@ impl Node {
         for (i, input) in self.inputs.iter().enumerate() {
             self.input_states[i] = InputState {
                 in_pin: input.in_pin,
-                state: self.get_input(input, default),
+                state: self.get_input(input, default)?,
             }
         }
+        Ok(())
     }
     fn next_output(&mut self, tick: u64) {
         match &self.node_type {
@@ -408,9 +445,9 @@ impl Node {
                 let mut b = false;
                 for input in &self.input_states {
                     match input.in_pin {
-                        0 => a=input.state,
-                        1 => b=input.state,
-                        _=> (),
+                        0 => a = input.state,
+                        1 => b = input.state,
+                        _ => (),
                     }
                 }
                 self.next_outputs[0] = a ^ b;
@@ -422,14 +459,14 @@ impl Node {
                 let mut c = false;
                 for input in &self.input_states {
                     match input.in_pin {
-                        0 => a=input.state,
-                        1 => b=input.state,
-                        2 => c=input.state,
-                        _=> (),
+                        0 => a = input.state,
+                        1 => b = input.state,
+                        2 => c = input.state,
+                        _ => (),
                     }
                 }
                 self.next_outputs[0] = a ^ b ^ c;
-                self.next_outputs[1] = (a&&b)||((a^b)&&c);
+                self.next_outputs[1] = (a && b) || ((a ^ b) && c);
             }
             NodeType::DEMUX => {
                 // order is sx-s0 then in
@@ -447,7 +484,7 @@ impl Node {
                 }
                 let mut n = 0;
                 let rev_pins = pins.iter().rev();
-                for (i,pin) in rev_pins.enumerate() {
+                for (i, pin) in rev_pins.enumerate() {
                     n |= *pin as u8 >> i;
                 }
                 for i in &mut self.next_outputs {
@@ -466,12 +503,12 @@ impl Node {
                     if input.in_pin < num_addr_pins {
                         pins[input.in_pin] = input.state;
                     } else {
-                        input_pins[input.in_pin-(num_addr_pins)] = input.state;
+                        input_pins[input.in_pin - (num_addr_pins)] = input.state;
                     }
                 }
                 let mut n = 0;
                 let rev_pins = pins.iter().rev();
-                for (i,pin) in rev_pins.enumerate() {
+                for (i, pin) in rev_pins.enumerate() {
                     n |= *pin as u8 >> i;
                 }
                 for i in &mut self.next_outputs {
@@ -495,8 +532,22 @@ impl Node {
             }
             NodeType::INTEGRATED_CIRCUIT => {
                 let instance = &mut self.ic_instance.as_mut().unwrap();
-                for comp in &mut instance.components {
-                    comp.get_inputs();
+                let iter = instance.components.iter_mut();
+                for comp in iter {
+                    if let Err(e) = comp.get_inputs() {
+                        eprintln!("Input Error!");
+                        match e.t {
+                            NodeErrorType::Input(ref i) => {
+                                if let Some(c) = instance.components.iter().find(|c| &c.id == &i.id)
+                                {
+                                    eprintln!("other: {} {:?} {:?}", &c.id.0, c.label, c.node_type);
+                                } else {
+                                    eprintln!("couldn't get other component with id: {}", &i.id.0);
+                                }
+                            }
+                        }
+                        panic!("{}", e);
+                    }
                 }
                 //set/override instance's inputs
                 for input in &self.input_states {
@@ -566,6 +617,11 @@ impl Node {
                 }
             }
             NodeType::T_FLIP_FLOP => {
+                //Q and ~Q
+                if !self.next_outputs[0] && !self.next_outputs[1] {
+                    self.next_outputs[1] = true; //~Q
+                }
+
                 let mut set: bool = false;
                 let mut reset: bool = false;
                 let mut data: bool = false;
@@ -598,14 +654,26 @@ impl Node {
                     (false, false) => (false, true),
                     (true, true) => {
                         //rising edge
-                        if clock && !self.flip_flop && data {
-                            (self.next_outputs[1], self.next_outputs[0])
-                        } else {
-                            (self.next_outputs[0], self.next_outputs[1])
+                        match self.flip_flop {
+                            true => {
+                                if !clock || !data {
+                                    self.flip_flop = false;
+                                }
+                                (self.next_outputs[0], self.next_outputs[1])
+                            }
+                            false => {
+                                if clock && data {
+                                    self.flip_flop = true;
+                                    (self.next_outputs[1], self.next_outputs[0])
+                                } else {
+                                    (self.next_outputs[0], self.next_outputs[1])
+                                }
+                            }
                         }
                     }
                 };
-                self.flip_flop = clock; //past clock
+                //?????
+                //self.flip_flop = clock; //past clock
             }
             NodeType::D_FLIP_FLOP => {
                 let mut data: bool = false;
@@ -632,6 +700,32 @@ impl Node {
                         }
                     }
                 }
+                (self.next_outputs[0], self.next_outputs[1]) = match (set, reset) {
+                    (false, true) => (true, false),
+                    (true, false) => (false, true),
+                    //reset (technically should be false false)
+                    //but we emulate sls and say false,true
+                    (false, false) => (false, true),
+                    (true, true) => {
+                        //rising edge
+                        match self.flip_flop {
+                            true => {
+                                if !clock || !data {
+                                    self.flip_flop = false;
+                                }
+                                (self.next_outputs[0], self.next_outputs[1])
+                            }
+                            false => {
+                                if clock && data {
+                                    self.flip_flop = true;
+                                    (self.next_outputs[1], self.next_outputs[0])
+                                } else {
+                                    (self.next_outputs[0], self.next_outputs[1])
+                                }
+                            }
+                        }
+                    }
+                };
                 (self.next_outputs[0], self.next_outputs[1]) = match (set, reset) {
                     (false, true) => (true, false),
                     (true, false) => (false, true),
@@ -678,7 +772,7 @@ enum CircuitType {
     #[default]
     Ic,
 }
-#[derive(Deserialize,Serialize, Default, Debug, Clone)]
+#[derive(Deserialize, Serialize, Default, Debug, Clone)]
 #[serde(rename_all = "UPPERCASE")]
 struct ICHeader {
     app_version: usize,
@@ -689,7 +783,7 @@ struct ICHeader {
     id: String,
 }
 
-#[derive(Deserialize,Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Wire {
     #[serde(rename = "S")]
     to: WireID,
@@ -697,8 +791,11 @@ pub struct Wire {
     from: WireID,
 }
 impl Wire {
-    pub fn new(from:ID,from_out:usize,to:ID,to_in:usize) -> Wire {
-        Wire { from: WireID(from,from_out), to: WireID(to,to_in) }
+    pub fn new(from: ID, from_out: usize, to: ID, to_in: usize) -> Wire {
+        Wire {
+            from: WireID(from, from_out),
+            to: WireID(to, to_in),
+        }
     }
 }
 #[derive(PartialEq, Clone, Debug, Eq, Hash, Default)]
@@ -706,7 +803,7 @@ struct WireID(ID, usize);
 
 impl<'de> Deserialize<'de> for WireID {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-where
+    where
         D: Deserializer<'de>,
     {
         deserializer.deserialize_string(WireIDVisitor)
@@ -714,9 +811,10 @@ where
 }
 impl Serialize for WireID {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer {
-        serializer.serialize_str(&format!("{}:{}",self.0.0,self.1))
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("{}:{}", self.0 .0, self.1))
     }
 }
 #[derive(Debug)]
@@ -733,7 +831,7 @@ impl std::fmt::Display for WireError {
 }
 impl de::Error for WireError {
     fn custom<T>(msg: T) -> Self
-where
+    where
         T: std::fmt::Display,
     {
         print!("WireError: {}", msg);
@@ -751,19 +849,19 @@ impl<'de> Visitor<'de> for WireIDVisitor {
     }
 
     fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
-where
+    where
         E: Error,
     {
         self.visit_str(&v)
     }
     fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
-where
+    where
         E: Error,
     {
         self.visit_str(v)
     }
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-where
+    where
         E: Error,
     {
         let mut iter = v.split(':');
@@ -802,7 +900,7 @@ where
 fn sort_comps(components: &mut Vec<Node>) {
     components.sort_by(|comp1, comp2| comp1.y.total_cmp(&comp2.y));
 }
-#[derive(Deserialize,Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct IC {
     header: ICHeader,
@@ -872,18 +970,18 @@ impl IC {
         }
     }
 }
-#[derive(Deserialize,Serialize, Default, Debug)]
+#[derive(Deserialize, Serialize, Default, Debug)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct Header {
     pub name: String,
     app_version: usize,
     #[serde(default)]
     pub id: ID,
-    #[serde(rename = "TYPE", default,skip_serializing)]
+    #[serde(rename = "TYPE", default, skip_serializing)]
     circ_type: CircuitType,
 }
 
-#[derive(Deserialize,Serialize, Debug,Default)]
+#[derive(Deserialize, Serialize, Debug, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct Circuit {
     #[serde(skip)]
@@ -903,14 +1001,18 @@ pub struct Circuit {
     wires: Vec<Wire>,
 }
 impl Circuit {
-    pub fn new(name:String,id:String,components: Vec<Node>,wires:Vec<Wire>) -> Self {
+    pub fn new(name: String, id: String, components: Vec<Node>, wires: Vec<Wire>) -> Self {
         Circuit {
-            header: Header { name, app_version: 158, id: ID(id), circ_type: CircuitType::Project },
+            header: Header {
+                name,
+                app_version: 158,
+                id: ID(id),
+                circ_type: CircuitType::Project,
+            },
             components,
             wires,
             ..Default::default()
         }
-
     }
 }
 /// returns true when added and false when already in hashmap
@@ -1097,7 +1199,7 @@ impl Circuit {
             if node_type == NodeType::PULSE_BUTTON || node_type == NodeType::TOGGLE_BUTTON {
                 self.inputs.push(i);
             } else if node_type == NodeType::LIGHT_BULB
-            || node_type == NodeType::SEVEN_SEGMENT_DISPLAY_DECODER
+                || node_type == NodeType::SEVEN_SEGMENT_DISPLAY_DECODER
             {
                 self.outputs.push(i);
             }
@@ -1108,7 +1210,19 @@ impl Circuit {
     }
     pub fn tick(&mut self) {
         for i in 0..self.components.len() {
-            self.components[i].get_inputs();
+            if let Err(e) = self.components[i].get_inputs() {
+                eprintln!("Input Error!");
+                match e.t {
+                    NodeErrorType::Input(ref i) => {
+                        if let Some(c) = self.components.iter().find(|c| &c.id == &i.id) {
+                            eprintln!("other: {} {:?} {:?}", &c.id.0, c.label, c.node_type);
+                        } else {
+                            eprintln!("couldn't get other component with id: {}", &i.id.0);
+                        }
+                    }
+                }
+                panic!("{}", e);
+            }
             self.components[i].next_output(self.tick_count);
         }
         for i in 0..self.components.len() {

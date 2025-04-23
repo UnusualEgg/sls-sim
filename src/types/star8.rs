@@ -199,30 +199,40 @@ enum State {
     run,
     prog(ProgState),
 }
-fn state_run(
-    x: &str,
+fn state_run<'arg, IT>(
+    args: &mut IT,
     n: &mut Circuit,
     outputs: &Outputs,
     buttons: &Buttons,
     stdin_channel: &Receiver<String>,
     paused: &mut bool,
     state: &mut State,
-) {
-    match x {
-        "p" => {
-            //TODO todo!("programming mode");
-            let prog = &mut n.components[n.inputs[buttons.prog_toggle]];
-            prog.next_outputs[0] = true;
-            *state = State::prog(ProgState::addr);
+) -> bool
+where
+    IT: Iterator<Item = &'arg str>,
+{
+    if let Some(x) = args.next() {
+        match x {
+            "p" => {
+                //TODO todo!("programming mode");
+                let prog = &mut n.components[n.inputs[buttons.prog_toggle]];
+                prog.next_outputs[0] = true;
+                *state = State::prog(ProgState::addr);
+            }
+            "t" => {
+                n.tick();
+            }
+            "c" => {
+                *paused = !*paused;
+            }
+            "r" => {
+                println!("{}", outputs.regs);
+            }
+            "q" => return true,
+            cmd => eprintln!("Unknown command \"{cmd}\"",),
         }
-        "t" => {
-            n.tick();
-        }
-        "c" => {
-            *paused = !*paused;
-        }
-        cmd => eprintln!("Unknown command \"{cmd}\"",),
     }
+    false
 }
 fn state_prog_addr(
     x: &str,
@@ -500,16 +510,17 @@ pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
                 }
                 match stdin_channel.try_recv() {
                     Ok(cmd) => {
-                        if let Some(x) = cmd.split_whitespace().next() {
-                            state_run(
-                                x,
-                                n,
-                                &outputs,
-                                &buttons,
-                                &stdin_channel,
-                                &mut paused,
-                                &mut state,
-                            )
+                        let mut x = cmd.split_whitespace();
+                        if state_run(
+                            &mut x,
+                            n,
+                            &outputs,
+                            &buttons,
+                            &stdin_channel,
+                            &mut paused,
+                            &mut state,
+                        ) {
+                            break 'main;
                         }
                     }
 
