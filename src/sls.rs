@@ -116,7 +116,7 @@ pub struct InputState {
 #[derive(Deserialize, Serialize, Clone)]
 struct Input {
     #[serde(skip, default = "none")]
-    other_output: RefCell<Vec<bool>>,
+    other_output: Weak<RefCell<Vec<bool>>>,
     #[serde(rename = "OTHER_CONNECTOR_ID")]
     other_pin: usize,
     #[serde(rename = "OTHER_COMPONENT")]
@@ -128,14 +128,20 @@ impl Debug for Input {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let o;
         f.debug_struct("Input")
-            .field("other_output", {
-                o = self.other_output.borrow();
-                if self.other_pin >= o.len() {
-                    &"Pin more than input"
-                } else {
-                    &o[self.other_pin]
-                }
-            })
+            .field(
+                "other_output",
+                match self.other_output.upgrade() {
+                    Some(x) => {
+                        o = (&x).try_borrow().unwrap().clone();
+                        if self.other_pin >= o.len() {
+                            &"Pin more than input"
+                        } else {
+                            &o[self.other_pin]
+                        }
+                    }
+                    None => &"Disconnected",
+                },
+            )
             .field("other_pin", &self.other_pin)
             .field("other_id", &self.other_id)
             .field("in_pin", &self.in_pin)
@@ -184,7 +190,7 @@ pub struct Node {
     #[serde(skip)]
     pub input_states: Vec<InputState>,
     #[serde(skip, default = "default_outputs")]
-    pub outputs: RefCell<Vec<bool>>,
+    pub outputs: Rc<RefCell<Vec<bool>>>,
     #[serde(skip)]
     pub next_outputs: Vec<bool>,
     #[serde(skip, default)]
@@ -340,28 +346,37 @@ impl Node {
         //also input_states
         //println!("inputs:{:#?} for {:?}", &self.inputs, self.node_type);
     }
-    fn get_input(&self, input: &Input) -> Result<bool, NodeError> {
-        let o = input.other_output.borrow();
-        if input.other_pin >= o.len() {
-            println!(
-                "{:#?}[pin: {}] id:{}",
-                o, input.other_pin, &input.other_id.0
-            );
-            Err(NodeError {
-                t: NodeErrorType::Input(InputError {
-                    id: input.other_id.clone(),
-                    pin: input.other_pin,
-                }),
-            })
-        } else {
-            Ok(o[input.other_pin])
+    fn get_input(&self, input: &Input, default: bool) -> Result<bool, NodeError> {
+        match input.other_output.upgrade() {
+            Some(x) => {
+                let o = (&x).try_borrow().unwrap();
+                if input.other_pin >= o.len() {
+                    println!(
+                        "{:#?}[pin: {}] id:{}",
+                        o, input.other_pin, &input.other_id.0
+                    );
+                    Err(NodeError {
+                        t: NodeErrorType::Input(InputError {
+                            id: input.other_id.clone(),
+                            pin: input.other_pin,
+                        }),
+                    })
+                } else {
+                    Ok(o[input.other_pin])
+                }
+            }
+            None => Ok(default),
         }
     }
     fn get_inputs(&mut self) -> Result<(), NodeError> {
+        let default = match &self.node_type {
+            NodeType::AND_GATE | NodeType::NOR_GATE => true,
+            _ => false,
+        };
         for (i, input) in self.inputs.iter().enumerate() {
             self.input_states[i] = InputState {
                 in_pin: input.in_pin,
-                state: self.get_input(input)?,
+                state: self.get_input(input, default)?,
             }
         }
         Ok(())
