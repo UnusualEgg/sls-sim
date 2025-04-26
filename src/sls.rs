@@ -1,7 +1,8 @@
+#[deny(unused_must_use)]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::fs::File;
 use std::rc::{Rc, Weak};
 use std::str::FromStr;
@@ -115,8 +116,9 @@ pub struct InputState {
 }
 #[derive(Deserialize, Serialize, Clone)]
 struct Input {
-    #[serde(skip, default = "none")]
-    other_output: Weak<RefCell<Vec<bool>>>,
+    //might change from bool late
+    #[serde(skip, default)]
+    other_output: ComponentRef<bool>,
     #[serde(rename = "OTHER_CONNECTOR_ID")]
     other_pin: usize,
     #[serde(rename = "OTHER_COMPONENT")]
@@ -126,20 +128,20 @@ struct Input {
 }
 impl Debug for Input {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let o;
+        let local_bool;
+        let local_error;
         f.debug_struct("Input")
             .field(
                 "other_output",
-                match self.other_output.upgrade() {
-                    Some(x) => {
-                        o = (&x).try_borrow().unwrap().clone();
-                        if self.other_pin >= o.len() {
-                            &"Pin more than input"
-                        } else {
-                            &o[self.other_pin]
-                        }
+                match self.other_output.get() {
+                    Ok(x) => {
+                        local_bool = x;
+                        &local_bool
                     }
-                    None => &"Disconnected",
+                    Err(e) => {
+                        local_error = e;
+                        &local_error
+                    }
                 },
             )
             .field("other_pin", &self.other_pin)
@@ -156,14 +158,14 @@ fn u64_iszero(num: &u64) -> bool {
     num == &0
 }
 
-#[derive(Debug)]
-struct InputError {
-    id: ID,
-    pin: usize,
-}
+// #[derive(Debug)]
+// struct InputError {
+//     com,
+//     pin: usize,
+// }
 #[derive(Debug)]
 enum NodeErrorType {
-    Input(InputError),
+    Input(ComponentInputError,ID),
 }
 #[derive(Debug)]
 struct NodeError {
@@ -172,21 +174,56 @@ struct NodeError {
 impl std::fmt::Display for NodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.t {
-            NodeErrorType::Input(i) => {
-                f.write_fmt(format_args!("ID:{} is missing out pin {}", i.id.0, i.pin))
+            NodeErrorType::Input(i,id) => {
+                write!(f,"Error with ID {}: ",&id.0)?;
+                fmt::Display::fmt(&i, f)
+                // f.write_fmt(format_args!("ID:{} is missing out pin {}", i.id.0, i.pin))
             }
         }
     }
 }
 impl std::error::Error for NodeError {}
+#[derive(Clone,Default)]
+pub struct ComponentRef<T: Clone> {
+    weak: Weak<RefCell<Vec<T>>>,
+    index: usize,
+}
+
+#[derive(Debug)]
+enum ComponentInputError {
+    IndexError(usize),
+    ComponentNotExit,
+}
+impl std::error::Error for ComponentInputError {}
+impl std::fmt::Display for ComponentInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+impl<T: std::clone::Clone> ComponentRef<T> {
+    pub fn new(weak: Weak<RefCell<Vec<T>>>, index: usize) -> Self {
+        Self { weak, index }
+    }
+    fn get(&self) -> Result<T, ComponentInputError> {
+        match self.weak.upgrade() {
+            None => Err(ComponentInputError::ComponentNotExit),
+            Some(v) => match v.borrow().get(self.index) {
+                None => Err(ComponentInputError::IndexError(self.index)),
+                Some(b) => Ok(b.clone()),
+            },
+        }
+    }
+}
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct Node {
     #[serde(rename = "TAG")]
     pub node_type: NodeType,
+    //first we get the inputs then store them into input_states
     #[serde(default, skip_serializing)]
     inputs: Vec<Input>,
+    //gets from inputs. Used for easier processing.
     #[serde(skip)]
     pub input_states: Vec<InputState>,
     #[serde(skip, default = "default_outputs")]
@@ -346,37 +383,19 @@ impl Node {
         //also input_states
         //println!("inputs:{:#?} for {:?}", &self.inputs, self.node_type);
     }
-    fn get_input(&self, input: &Input, default: bool) -> Result<bool, NodeError> {
-        match input.other_output.upgrade() {
-            Some(x) => {
-                let o = (&x).try_borrow().unwrap();
-                if input.other_pin >= o.len() {
-                    println!(
-                        "{:#?}[pin: {}] id:{}",
-                        o, input.other_pin, &input.other_id.0
-                    );
-                    Err(NodeError {
-                        t: NodeErrorType::Input(InputError {
-                            id: input.other_id.clone(),
-                            pin: input.other_pin,
-                        }),
-                    })
-                } else {
-                    Ok(o[input.other_pin])
-                }
+    fn get_input(&self, input: &Input) -> Result<bool, NodeError> {
+        match input.other_output.get() {
+            Ok(b) => {
+                Ok(b)
             }
-            None => Ok(default),
+            Err(e) => Err(NodeError { t: NodeErrorType::Input(e,input.other_id.clone()) }),
         }
     }
     fn get_inputs(&mut self) -> Result<(), NodeError> {
-        let default = match &self.node_type {
-            NodeType::AND_GATE | NodeType::NOR_GATE => true,
-            _ => false,
-        };
         for (i, input) in self.inputs.iter().enumerate() {
             self.input_states[i] = InputState {
                 in_pin: input.in_pin,
-                state: self.get_input(input, default)?,
+                state: self.get_input(input)?,
             }
         }
         Ok(())
@@ -534,15 +553,15 @@ impl Node {
                 let instance = &mut self.ic_instance.as_mut().unwrap();
                 let iter = instance.components.iter_mut();
                 for comp in iter {
-                    if let Err(e) = comp.get_inputs() {
+                    if let Err(ref e) = comp.get_inputs() {
                         eprintln!("Input Error!");
-                        match e.t {
-                            NodeErrorType::Input(ref i) => {
-                                if let Some(c) = instance.components.iter().find(|c| &c.id == &i.id)
+                        match &e.t {
+                            NodeErrorType::Input(i,id) => {
+                                if let Some(c) = instance.components.iter().find(|c| &c.id == id)
                                 {
                                     eprintln!("other: {} {:?} {:?}", &c.id.0, c.label, c.node_type);
                                 } else {
-                                    eprintln!("couldn't get other component with id: {}", &i.id.0);
+                                    eprintln!("couldn't get other component with id: {}", &id.0);
                                 }
                             }
                         }
@@ -924,7 +943,7 @@ impl IC {
         for comp in &mut self.components {
             for input in &mut comp.inputs {
                 //find other comp
-                input.other_output = ids.get(&input.other_id).unwrap().clone();
+                input.other_output = ComponentRef::new(ids.get(&input.other_id).unwrap().clone(),input.other_pin);
             }
             comp.input_states
                 .resize(comp.inputs.len(), InputState::default());
@@ -941,7 +960,7 @@ impl IC {
                 .find(|comp| comp.id == wire.to.0)
                 .unwrap();
             comp.inputs.push(Input {
-                other_output: ids.get(&wire.from.0).unwrap().clone(),
+                other_output: ComponentRef::new(ids.get(&wire.from.0).unwrap().clone(),wire.from.1),
                 other_pin: wire.from.1,
                 other_id: wire.from.0.clone(),
                 in_pin: wire.to.1,
@@ -1141,7 +1160,7 @@ impl Circuit {
         for comp in &mut self.components {
             for input in &mut comp.inputs {
                 //find other comp
-                input.other_output = ids.get(&input.other_id).unwrap().clone();
+                input.other_output = ComponentRef::new(ids.get(&input.other_id).unwrap().clone(),input.other_pin);
             }
             comp.input_states
                 .resize(comp.inputs.len(), InputState::default());
@@ -1158,7 +1177,7 @@ impl Circuit {
                 .find(|comp| comp.id == wire.to.0)
                 .unwrap();
             comp.inputs.push(Input {
-                other_output: ids.get(&wire.from.0).unwrap().clone(),
+                other_output: ComponentRef::new(ids.get(&wire.from.0).unwrap().clone(),wire.from.1),
                 other_pin: wire.from.1,
                 other_id: wire.from.0.clone(),
                 in_pin: wire.to.1,
@@ -1212,12 +1231,13 @@ impl Circuit {
         for i in 0..self.components.len() {
             if let Err(e) = self.components[i].get_inputs() {
                 eprintln!("Input Error!");
-                match e.t {
-                    NodeErrorType::Input(ref i) => {
-                        if let Some(c) = self.components.iter().find(|c| &c.id == &i.id) {
+                match &e.t {
+                    NodeErrorType::Input(i,id) => {
+                        if let Some(c) = self.components.iter().find(|c| &c.id == id)
+                        {
                             eprintln!("other: {} {:?} {:?}", &c.id.0, c.label, c.node_type);
                         } else {
-                            eprintln!("couldn't get other component with id: {}", &i.id.0);
+                            eprintln!("couldn't get other component with id: {}", &id.0);
                         }
                     }
                 }

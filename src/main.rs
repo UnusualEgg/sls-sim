@@ -1,14 +1,12 @@
 #[deny(unused_must_use)]
 use crate::sls::NodeType;
-use clap::{Parser, Subcommand};
 use core::panic;
 use std::io::{Read, Write};
 use std::str::FromStr;
 use std::sync::{
     mpsc,
-    mpsc::{Receiver, TryRecvError},
+    mpsc::Receiver,
 };
-use std::time::{Duration, Instant};
 use std::{io, thread};
 
 mod sls;
