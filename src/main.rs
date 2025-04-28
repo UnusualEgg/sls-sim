@@ -1,6 +1,7 @@
 #[deny(unused_must_use)]
 use crate::sls::NodeType;
 use core::panic;
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::str::FromStr;
 use std::sync::{
@@ -275,6 +276,29 @@ fn main() {
                 let f = std::fs::File::open(filename).unwrap();
                 let mut n: sls::Circuit =
                     serde_json::from_reader(std::io::BufReader::new(f)).unwrap();
+                //maybe also path to deps with URIs.json
+                if let Some(p) = args.next() {
+                    let deps_path = std::path::PathBuf::from_str(&p).unwrap();
+                    let uris_raw_path = deps_path.join("URIs.json");
+                    let uris_path =uris_raw_path.to_str().unwrap();
+                    println!("opening {}",&uris_path);
+                    let uris_str = std::fs::read_to_string(uris_path).unwrap();
+                    let uris:std::collections::hash_map::HashMap<String,String> = serde_json::from_str(&uris_str).unwrap();
+
+                    for (key,value) in uris.into_iter() {
+                        if !n.dependencies.contains_key(&key) {
+                            let dep = serde_json::from_str(&std::fs::read_to_string(uris_raw_path.with_file_name(value).to_str().unwrap()).unwrap()).unwrap();
+                            n.dependencies.insert(key, dep);
+                        }
+                    }
+                    
+                    //for entry in deps_path.read_dir().unwrap() {
+                    //    let e = entry.unwrap();
+                    //    if e.file_name()=="URIs.json" {
+
+                    //    }
+                    //}
+                }
 
                 //connect bits and stuff
                 n.init_circ();

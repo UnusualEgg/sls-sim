@@ -232,6 +232,8 @@ pub struct Node {
     pub next_outputs: Vec<bool>,
     #[serde(skip, default)]
     flip_flop: bool,
+    #[serde(skip, default)]
+    rising_edge_prev: bool, //used to detect rising edge inputs
     id: ID,
     x: f32,
     pub y: f32,
@@ -573,6 +575,9 @@ impl Node {
                         panic!("{}", e);
                     }
                 }
+                for comp in &mut instance.components {
+                    comp.get_inputs();
+                }
                 //set/override instance's inputs
                 for input in &self.input_states {
                     /*
@@ -646,64 +651,59 @@ impl Node {
                     self.next_outputs[1] = true; //~Q
                 }
 
-                let mut set: bool = false;
-                let mut reset: bool = false;
-                let mut data: bool = false;
+                let mut preset: bool = false;
+                let mut t: bool = false;
                 let mut clock: bool = false;
+                let mut clear: bool = false;
                 for input in &self.input_states {
                     let state = input.state;
                     match input.in_pin {
                         0 => {
-                            set = state;
+                            preset = state;
                         }
                         1 => {
-                            reset = state;
+                            t = state;
                         }
                         2 => {
-                            data = state;
-                        }
-                        3 => {
                             clock = state;
                         }
+                        3 => {
+                            clear = state;
+                        }
                         n => {
-                            panic!("tried to acess input {} of D_FLIP_FLOP", n);
+                            panic!("tried to acess input {} of T_FLIP_FLOP", n);
                         }
                     }
                 }
-                (self.next_outputs[0], self.next_outputs[1]) = match (set, reset) {
-                    (false, true) => (true, false),
-                    (true, false) => (false, true),
-                    //reset (technically should be false false)
-                    //but we emulate sls and say false,true
-                    (false, false) => (false, true),
-                    (true, true) => {
-                        //rising edge
-                        match self.flip_flop {
-                            true => {
-                                if !clock || !data {
-                                    self.flip_flop = false;
-                                }
-                                (self.next_outputs[0], self.next_outputs[1])
+                match (preset,clear) {
+                    (false,false) => {
+                        (self.next_outputs[0],self.next_outputs[1])=(false,true);
+                    }
+                    (true,false) => {
+                        (self.next_outputs[0],self.next_outputs[1])=(false,true);
+                    }
+                    (false,true) => {
+                        (self.next_outputs[0],self.next_outputs[1])=(true,false);
+                    }
+                    (true,true) => {
+                        match t {
+                            true => if !self.rising_edge_prev && clock {
+                                //on rising edge of clock
+                                (self.next_outputs[0],self.next_outputs[1])=
+                                (self.next_outputs[1],self.next_outputs[0]);
                             }
-                            false => {
-                                if clock && data {
-                                    self.flip_flop = true;
-                                    (self.next_outputs[1], self.next_outputs[0])
-                                } else {
-                                    (self.next_outputs[0], self.next_outputs[1])
-                                }
-                            }
+                            false => (),
                         }
                     }
-                };
-                //?????
-                //self.flip_flop = clock; //past clock
+                }
+                self.rising_edge_prev=clock;
             }
             NodeType::D_FLIP_FLOP => {
                 let mut data: bool = false;
                 let mut clock: bool = false;
                 let mut set: bool = false;
                 let mut reset: bool = false;
+                //for some reason out of order
                 for input in &self.input_states {
                     let state = input.state;
                     match input.in_pin {
@@ -724,48 +724,25 @@ impl Node {
                         }
                     }
                 }
-                (self.next_outputs[0], self.next_outputs[1]) = match (set, reset) {
-                    (false, true) => (true, false),
-                    (true, false) => (false, true),
-                    //reset (technically should be false false)
-                    //but we emulate sls and say false,true
-                    (false, false) => (false, true),
-                    (true, true) => {
-                        //rising edge
-                        match self.flip_flop {
-                            true => {
-                                if !clock || !data {
-                                    self.flip_flop = false;
-                                }
-                                (self.next_outputs[0], self.next_outputs[1])
-                            }
-                            false => {
-                                if clock && data {
-                                    self.flip_flop = true;
-                                    (self.next_outputs[1], self.next_outputs[0])
-                                } else {
-                                    (self.next_outputs[0], self.next_outputs[1])
-                                }
-                            }
+                match (set,reset) {
+                    (false,false) => {
+                        (self.next_outputs[0],self.next_outputs[1])=(false,true);
+                    }
+                    (true,false) => {
+                        (self.next_outputs[0],self.next_outputs[1])=(false,true);
+                    }
+                    (false,true) => {
+                        (self.next_outputs[0],self.next_outputs[1])=(true,false);
+                    }
+                    (true,true) => {
+                        if !self.rising_edge_prev && clock {
+                            //on rising edge of clock
+                            self.next_outputs[0]=data;
+                            self.next_outputs[1]=!data;
                         }
                     }
-                };
-                (self.next_outputs[0], self.next_outputs[1]) = match (set, reset) {
-                    (false, true) => (true, false),
-                    (true, false) => (false, true),
-                    //reset (technically should be false false)
-                    //but we emulate sls and say false,true
-                    (false, false) => (false, true),
-                    (true, true) => {
-                        //rising edge
-                        if clock && !self.flip_flop {
-                            (data, !data)
-                        } else {
-                            (self.next_outputs[0], self.next_outputs[1])
-                        }
-                    }
-                };
-                self.flip_flop = clock; //past clock
+                }
+                self.rising_edge_prev=clock;
             }
             NodeType::SEVEN_SEGMENT_DISPLAY_DECODER => {
                 //not gonna actually simulate, just gonna show input number
@@ -1013,7 +990,7 @@ pub struct Circuit {
     pub header: Header,
     pub components: Vec<Node>,
     #[serde(default)]
-    dependencies: BTreeMap<String, IC>,
+    pub dependencies: BTreeMap<String, IC>,
     //indicies of inputs
     #[serde(skip)]
     pub inputs: Vec<usize>,

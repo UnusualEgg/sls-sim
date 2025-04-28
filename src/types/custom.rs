@@ -20,7 +20,6 @@ pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
 
         if !paused {
             n.tick();
-        } else {
         }
 
         match stdin_channel.try_recv() {
@@ -30,21 +29,22 @@ pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
                 let mut it = removed.split(' ');
                 match it.next() {
                     Some(comm) => {
-                        match comm {
-                            "q" => {
+                        let mut command_chars = comm.chars();
+                        match command_chars.next().unwrap() {
+                            'q' => {
                                 break 'main;
                             }
-                            "p" => {
+                            'p' => {
                                 paused = !paused;
                                 println!("{}", if paused { "paused" } else { "unpaused" });
                             }
-                            "t" => {
+                            't' => {
                                 n.tick();
                             }
-                            "h" => {
+                            'h' => {
                                 println!("hewro");
                             }
-                            "o" => {
+                            'o' => {
                                 println!("outputs:");
                                 for i in &n.outputs {
                                     let comp = &n.components[*i];
@@ -82,7 +82,7 @@ pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
                                     }
                                 }
                             }
-                            "i" => {
+                            'i' => {
                                 println!("buttons:");
                                 for i in 0..n.inputs.len() {
                                     let comp = &n.components[n.inputs[i]];
@@ -99,7 +99,7 @@ pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
                                     );
                                 }
                             }
-                            "c" => match it.next() {
+                            'c' => match it.next() {
                                 Some(s) => match usize::from_str(s) {
                                     Ok(num) => {
                                         let comp = &n.components[num];
@@ -134,7 +134,16 @@ pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
                                                 }
                                             },
                                             None => {
-                                                println!("components:{:#?}\n", comp);
+                                                match command_chars.next() {
+                                                    None =>
+                                                println!("components:{:#?}\n", comp),
+                                                    Some(c) => match c {
+                                                        'i' => {
+                                                            println!("{:#?}\n{:#?}",&comp.input_states,&comp.outputs);
+                                                        }
+                                                        _=>println!("unknown option {} for c",c),
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -152,7 +161,7 @@ pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
                                     }
                                 }
                             },
-                            "s" => 's: {
+                            's' => 's: {
                                 match it.next() {
                                     Some(s) => match usize::from_str(s) {
                                         Ok(num) => {
