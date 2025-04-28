@@ -364,7 +364,12 @@ impl Node {
         outputs.resize(output_n, false);
         self.next_outputs.resize(output_n, false);
         match self.node_type {
-            NodeType::D_FLIP_FLOP | NodeType::SR_LATCH => {
+            NodeType::D_FLIP_FLOP
+                    | NodeType::SR_LATCH
+                    | NodeType::JK_FLIP_FLOP
+                    | NodeType::SR_FLIP_FLOP
+                    | NodeType::T_FLIP_FLOP 
+            => {
                 outputs[0] = false;
                 outputs[1] = true;
                 self.next_outputs[0] = false;
@@ -629,7 +634,7 @@ impl Node {
                         self.next_outputs[1] = true;
                     }
                     (true, true) => {
-                        self.next_outputs[0] = false;
+                        self.next_outputs[0] = true;
                         self.next_outputs[1] = false;
                     }
                     (false, false) => {}
