@@ -292,9 +292,12 @@ impl Component {
         }
         let cid = self.cid.as_ref().expect("cid");
         let original = &dependencies[cid];
-        //TODO this just does a shallow clone
+        //this just does a shallow clone
         //we need to do a deep clone including outputs
         let mut new = original.clone();
+        for comp in &mut new.components {
+            comp.outputs = Rc::new(RefCell::new(Vec::new()));
+        }
         //go thru every ic and set instance recursively
         for comp in new
             .components
@@ -335,9 +338,6 @@ impl Component {
                 }
             }
         };
-        //-_-
-        //FIXME make this work
-        self.outputs = Rc::new(RefCell::new(Vec::new()));
         let mut outputs = self.outputs.borrow_mut();
         outputs.resize(output_n, false);
         self.next_outputs.resize(output_n, false);
@@ -1041,6 +1041,8 @@ impl Circuit {
         for (_, ic) in self.dependencies.iter_mut() {
             ic.get_io_indexes();
         }
+        //coonnect components
+        self.connect();
         let deps_clone = &self.dependencies;
         for comp in self
             .components
@@ -1049,11 +1051,7 @@ impl Circuit {
         {
             comp.set_instance(&deps_clone);
         }
-        //coonnect components
-        self.connect();
-        //find io
-        //self.get_io_indexes_top();
-        println!("wires: {:?}", self.wires);
+        //println!("wires: {:?}", self.wires);
     }
     pub fn tick(&mut self) {
         for i in 0..self.components.len() {
