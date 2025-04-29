@@ -44,10 +44,10 @@ fn main() {
                 println!("addr_lines: {}", addr_lines);
 
                 //make input and output
-                let mut inputs: Vec<sls::Node> = Vec::with_capacity(addr_lines as usize);
+                let mut inputs: Vec<sls::Component> = Vec::with_capacity(addr_lines as usize);
                 for n in 0..(addr_lines) {
                     inputs.push({
-                        let button = sls::Node::new(
+                        let button = sls::Component::new(
                             NodeType::TOGGLE_BUTTON,
                             Some(n.to_string()),
                             id.to_string(),
@@ -59,10 +59,10 @@ fn main() {
                 }
                 //make it 8 bit
                 const BITWIDTH: usize = 8;
-                let mut outputs: Vec<sls::Node> = Vec::with_capacity(BITWIDTH);
+                let mut outputs: Vec<sls::Component> = Vec::with_capacity(BITWIDTH);
                 for n in 0..BITWIDTH {
                     outputs.push({
-                        let light = sls::Node::new(
+                        let light = sls::Component::new(
                             NodeType::LIGHT_BULB,
                             Some(n.to_string()),
                             id.to_string(),
@@ -74,7 +74,7 @@ fn main() {
                 }
                 //need to make this a vec
                 //muxes[bit][layer(x)][y]
-                let mut muxes: Vec<Vec<Vec<sls::Node>>> = Vec::new();
+                let mut muxes: Vec<Vec<Vec<sls::Component>>> = Vec::new();
                 //add mux
                 //let mut mux1 = sls::Node::new(NodeType::MUX, None, id.to_string());
                 //let new_addr_lines:usize = if addr_lines<4 {addr_lines} else {4};
@@ -128,7 +128,7 @@ fn main() {
                         let size = 2usize.pow(new_addr_lines as u32);
                         for _ in 0..*n {
                             v.push({
-                                let mut mux = sls::Node::new(NodeType::MUX, None, id.to_string());
+                                let mut mux = sls::Component::new(NodeType::MUX, None, id.to_string());
                                 mux.set_size(size);
                                 id += 1;
                                 mux
@@ -181,7 +181,7 @@ fn main() {
                             .enumerate();
                         for (i, (num_inputs, id)) in iter {
                             for n in 0..num_inputs {
-                                let prev: &sls::Node = &muxes[bit][layer_i - 1][i * num_inputs + n];
+                                let prev: &sls::Component = &muxes[bit][layer_i - 1][i * num_inputs + n];
                                 wires.push(sls::Wire::new(
                                     prev.get_id().clone(),
                                     0,
@@ -195,7 +195,7 @@ fn main() {
                 }
 
                 //connect const_hi to muxes
-                let hi = sls::Node::new(NodeType::HIGH_CONSTANT, None, id.to_string());
+                let hi = sls::Component::new(NodeType::HIGH_CONSTANT, None, id.to_string());
                 id += 1;
                 for bit in 0..BITWIDTH {
                     if let Some(first_muxes) = muxes[bit].first() {
@@ -238,7 +238,7 @@ fn main() {
                 }
 
                 //create circ
-                let mut components: Vec<sls::Node> =
+                let mut components: Vec<sls::Component> =
                     Vec::with_capacity(inputs.len() + outputs.len() + muxes.len());
                 let muxes_comp = muxes.concat().concat();
                 components.extend(muxes_comp);
@@ -277,31 +277,11 @@ fn main() {
                 let mut n: sls::Circuit =
                     serde_json::from_reader(std::io::BufReader::new(f)).unwrap();
                 //maybe also path to deps with URIs.json
-                if let Some(p) = args.next() {
-                    let deps_path = std::path::PathBuf::from_str(&p).unwrap();
-                    let uris_raw_path = deps_path.join("URIs.json");
-                    let uris_path =uris_raw_path.to_str().unwrap();
-                    println!("opening {}",&uris_path);
-                    let uris_str = std::fs::read_to_string(uris_path).unwrap();
-                    let uris:std::collections::hash_map::HashMap<String,String> = serde_json::from_str(&uris_str).unwrap();
-
-                    for (key,value) in uris.into_iter() {
-                        if !n.dependencies.contains_key(&key) {
-                            let dep = serde_json::from_str(&std::fs::read_to_string(uris_raw_path.with_file_name(value).to_str().unwrap()).unwrap()).unwrap();
-                            n.dependencies.insert(key, dep);
-                        }
-                    }
-                    
-                    //for entry in deps_path.read_dir().unwrap() {
-                    //    let e = entry.unwrap();
-                    //    if e.file_name()=="URIs.json" {
-
-                    //    }
-                    //}
-                }
 
                 //connect bits and stuff
-                n.init_circ();
+                let path = std::path::PathBuf::from_str(args.next().get_or_insert(".".to_owned())).unwrap();
+                println!("path: {}",path.display());
+                n.init_circ(&path);
                 let circ_type = match n.header.id.0.as_str() {
                     //"0282d111-5222-4675-80d7-69156904bf03" => CircType::Star8,
                     _ => CircType::Custom,

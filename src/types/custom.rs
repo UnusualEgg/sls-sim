@@ -1,4 +1,4 @@
-use crate::sls::NodeType;
+use crate::sls::{Circuit, NodeType};
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
@@ -30,166 +30,211 @@ pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
                 match it.next() {
                     Some(comm) => {
                         let mut command_chars = comm.chars();
-                        match command_chars.next().unwrap() {
-                            'q' => {
-                                break 'main;
-                            }
-                            'p' => {
-                                paused = !paused;
-                                println!("{}", if paused { "paused" } else { "unpaused" });
-                            }
-                            't' => {
-                                n.tick();
-                            }
-                            'h' => {
-                                println!("hewro");
-                            }
-                            'o' => {
-                                println!("outputs:");
-                                for i in &n.outputs {
-                                    let comp = &n.components[*i];
-                                    match comp.node_type {
-                                        NodeType::LIGHT_BULB => {
-                                            print!("light");
-                                            match &comp.label {
-                                                Some(label) => {
-                                                    println!("({})", label);
-                                                }
-                                                None => {}
-                                            }
-                                            let b: bool = comp.outputs.try_borrow().unwrap()[0];
-                                            println!(":{}\n", b);
-                                        }
-                                        NodeType::SEVEN_SEGMENT_DISPLAY_DECODER => {
-                                            print!("hex");
-                                            match &comp.label {
-                                                Some(label) => {
-                                                    print!("({}) ", label);
-                                                }
-                                                None => {
-                                                    print!("Display: ")
-                                                }
-                                            }
-                                            let mut num = 0;
-                                            for input in &comp.input_states {
-                                                if input.state {
-                                                    num += 8 >> input.in_pin;
-                                                }
-                                            }
-                                            println!("{:x}", num);
-                                        }
-                                        _ => {}
-                                    }
+                        match command_chars.next() {
+                            None => (),
+                            Some(c) => match c {
+                                'q' => {
+                                    break 'main;
                                 }
-                            }
-                            'i' => {
-                                println!("buttons:");
-                                for i in 0..n.inputs.len() {
-                                    let comp = &n.components[n.inputs[i]];
-                                    print!("{}:\t{:?}", i, n.components[n.inputs[i]].node_type);
-                                    match &comp.label {
-                                        Some(label) => {
-                                            print!("({})", label);
-                                        }
-                                        None => {}
-                                    }
-                                    println!(
-                                        " - {:#?}\n",
-                                        n.components[n.inputs[i]].outputs.try_borrow().unwrap()[0]
-                                    );
+                                'p' => {
+                                    paused = !paused;
+                                    println!("{}", if paused { "paused" } else { "unpaused" });
                                 }
-                            }
-                            'c' => match it.next() {
-                                Some(s) => match usize::from_str(s) {
-                                    Ok(num) => {
-                                        let comp = &n.components[num];
-                                        //check if we have anotehr num
-                                        match it.next() {
-                                            Some(s) => match usize::from_str(s) {
-                                                Ok(num2) => {
-                                                    //index into ic_instance
-                                                    match &comp.ic_instance {
-                                                        Some(ic) => match ic.components.get(num2) {
-                                                            Some(inner_comp) => {
-                                                                println!("inner:{:#?}", inner_comp);
-                                                            }
-                                                            None => {
-                                                                for i in 0..ic.components.len() {
-                                                                    println!(
-                                                                        "{} {:?}({:?})",
-                                                                        i,
-                                                                        &ic.components[i].node_type,
-                                                                        &ic.components[i].label
-                                                                    );
-                                                                }
-                                                            }
-                                                        },
-                                                        None => {
-                                                            println!("component {} doesn't have an ic instance",num);
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    println!("parsing after c: {}", e);
-                                                }
-                                            },
-                                            None => {
-                                                match command_chars.next() {
-                                                    None =>
-                                                println!("components:{:#?}\n", comp),
-                                                    Some(c) => match c {
-                                                        'i' => {
-                                                            println!("{:#?}\n{:#?}",&comp.input_states,&comp.outputs);
-                                                        }
-                                                        _=>println!("unknown option {} for c",c),
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        println!("parsing after c: {}", e);
-                                    }
-                                },
-                                None => {
-                                    println!("expected switch num after c");
-                                    for i in 0..n.components.len() {
+                                't' => {
+                                    n.tick();
+                                }
+                                'h' => {
+                                    println!("hewro");
+                                }
+                                'a' => {
+
+                                    let instance =
+                                        n.components[7].ic_instance.as_ref().unwrap();
+                                    let instance2 =
+                                        n.components[11].ic_instance.as_ref().unwrap();
+                                    println!("{:?}",(instance as *const Circuit as usize)==instance2 as *const Circuit as usize);
+                                }
+                                'd' => {
+                                    let instance =
+                                        n.components[7].ic_instance.as_ref().unwrap();
+                                    for i in 0..instance.inputs.len() {
+                                        let comp_index = instance.inputs[i];
                                         println!(
-                                            "{} {:?}({:?})",
-                                            i, &n.components[i].node_type, &n.components[i].label
+                                            "{:#?}",
+                                            instance.components[comp_index].next_outputs[0]
+                                        );
+                                    }
+                                    let instance =
+                                        n.components[11].ic_instance.as_ref().unwrap();
+                                    for i in 0..instance.inputs.len() {
+                                        let comp_index = instance.inputs[i];
+                                        println!(
+                                            "{:#?}",
+                                            instance.components[comp_index].next_oututs[0]
                                         );
                                     }
                                 }
-                            },
-                            's' => 's: {
-                                match it.next() {
+                                'o' => {
+                                    println!("outputs:");
+                                    for i in &n.outputs {
+                                        let comp = &n.components[*i];
+                                        match comp.node_type {
+                                            NodeType::LIGHT_BULB => {
+                                                print!("light");
+                                                match &comp.label {
+                                                    Some(label) => {
+                                                        println!("({})", label);
+                                                    }
+                                                    None => {}
+                                                }
+                                                let b: bool = comp.outputs.try_borrow().unwrap()[0];
+                                                println!(":{}\n", b);
+                                            }
+                                            NodeType::SEVEN_SEGMENT_DISPLAY_DECODER => {
+                                                print!("hex");
+                                                match &comp.label {
+                                                    Some(label) => {
+                                                        print!("({}) ", label);
+                                                    }
+                                                    None => {
+                                                        print!("Display: ")
+                                                    }
+                                                }
+                                                let mut num = 0;
+                                                for input in &comp.input_states {
+                                                    if input.state {
+                                                        num += 8 >> input.in_pin;
+                                                    }
+                                                }
+                                                println!("{:x}", num);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                'i' => {
+                                    println!("buttons:");
+                                    for i in 0..n.inputs.len() {
+                                        let comp = &n.components[n.inputs[i]];
+                                        print!("{}:\t{:?}", i, n.components[n.inputs[i]].node_type);
+                                        match &comp.label {
+                                            Some(label) => {
+                                                print!("({})", label);
+                                            }
+                                            None => {}
+                                        }
+                                        println!(
+                                            " - {:#?}\n",
+                                            n.components[n.inputs[i]].outputs.try_borrow().unwrap()
+                                                [0]
+                                        );
+                                    }
+                                }
+                                'c' => match it.next() {
                                     Some(s) => match usize::from_str(s) {
                                         Ok(num) => {
-                                            if n.inputs.len() <= num {
-                                                println!(
-                                                    "{} is isn't below {}",
-                                                    num,
-                                                    n.inputs.len()
-                                                );
-                                                break 's;
+                                            let comp = &n.components[num];
+                                            //check if we have anotehr num
+                                            match it.next() {
+                                                Some(s) => match usize::from_str(s) {
+                                                    Ok(num2) => {
+                                                        //index into ic_instance
+                                                        match &comp.ic_instance {
+                                                            Some(ic) => match ic
+                                                                .components
+                                                                .get(num2)
+                                                            {
+                                                                Some(inner_comp) => {
+                                                                    println!(
+                                                                        "inner:{:#?}",
+                                                                        inner_comp
+                                                                    );
+                                                                }
+                                                                None => {
+                                                                    for i in 0..ic.components.len()
+                                                                    {
+                                                                        println!(
+                                                                            "{} {:?}({:?})",
+                                                                            i,
+                                                                            &ic.components[i]
+                                                                                .node_type,
+                                                                            &ic.components[i].label
+                                                                        );
+                                                                    }
+                                                                }
+                                                            },
+                                                            None => {
+                                                                println!("component {} doesn't have an ic instance",num);
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        println!("parsing after c: {}", e);
+                                                    }
+                                                },
+                                                None => match command_chars.next() {
+                                                    None => println!("components:{:#?}\n", comp),
+                                                    Some(c) => match c {
+                                                        'i' => {
+                                                            println!(
+                                                                "{:#?}\n{:#?}",
+                                                                &comp.input_states, &comp.outputs
+                                                            );
+                                                        }
+                                                        _ => println!("unknown option {} for c", c),
+                                                    },
+                                                },
                                             }
-                                            let comp_index = n.inputs[num];
-                                            let comp = &mut n.components[comp_index];
-                                            comp.next_outputs[0] = !comp.next_outputs[0];
-                                            println!("set {} to {}\n", num, comp.next_outputs[0]);
                                         }
                                         Err(e) => {
-                                            println!("parsing after s: {}", e);
+                                            println!("parsing after c: {}", e);
                                         }
                                     },
                                     None => {
-                                        println!("expected switch num after s");
+                                        println!("expected switch num after c");
+                                        for i in 0..n.components.len() {
+                                            println!(
+                                                "{} {:?}({:?})",
+                                                i,
+                                                &n.components[i].node_type,
+                                                &n.components[i].label
+                                            );
+                                        }
                                     }
-                                };
-                            }
-                            _ => {
-                                println!("wot?");
-                            }
+                                },
+                                's' => 's: {
+                                    match it.next() {
+                                        Some(s) => match usize::from_str(s) {
+                                            Ok(num) => {
+                                                if n.inputs.len() <= num {
+                                                    println!(
+                                                        "{} is isn't below {}",
+                                                        num,
+                                                        n.inputs.len()
+                                                    );
+                                                    break 's;
+                                                }
+                                                let comp_index = n.inputs[num];
+                                                let comp = &mut n.components[comp_index];
+                                                comp.next_outputs[0] = !comp.next_outputs[0];
+                                                println!(
+                                                    "set {} to {}\n",
+                                                    num, comp.next_outputs[0]
+                                                );
+                                            }
+                                            Err(e) => {
+                                                println!("parsing after s: {}", e);
+                                            }
+                                        },
+                                        None => {
+                                            println!("expected switch num after s");
+                                        }
+                                    };
+                                }
+                                _ => {
+                                    println!("wot?");
+                                }
+                            },
                         }
                     }
                     None => {

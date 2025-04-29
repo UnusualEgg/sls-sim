@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use crate::sls::{self, Circuit, Node};
+use crate::sls::{self, Circuit, Component};
 
 #[derive(Parser)]
 struct StarArgs {
@@ -167,7 +167,7 @@ enum ExpectLight {
     Value,
     Write,
 }
-fn is_on(c: &Node) -> bool {
+fn is_on(c: &Component) -> bool {
     c.outputs.borrow()[0]
 }
 fn get_expected(n: &Circuit, outputs: &Outputs) -> Option<ExpectLight> {
