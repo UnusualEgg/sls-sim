@@ -1,4 +1,5 @@
 use crate::sls::{Circuit, NodeType};
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
@@ -47,30 +48,50 @@ pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
                                     println!("hewro");
                                 }
                                 'a' => {
-
-                                    let instance =
-                                        n.components[7].ic_instance.as_ref().unwrap();
-                                    let instance2 =
-                                        n.components[11].ic_instance.as_ref().unwrap();
-                                    println!("{:?}",(instance as *const Circuit as usize)==instance2 as *const Circuit as usize);
+                                    let instance = n.components[7].ic_instance.as_ref().unwrap();
+                                    let instance2 = n.components[11].ic_instance.as_ref().unwrap();
+                                    println!(
+                                        "{:?}",
+                                        (instance as *const Circuit as usize)
+                                            == instance2 as *const Circuit as usize
+                                    );
                                 }
                                 'd' => {
-                                    let instance =
-                                        n.components[7].ic_instance.as_ref().unwrap();
-                                    for i in 0..instance.inputs.len() {
-                                        let comp_index = instance.inputs[i];
+                                    let instance = n.components[7].ic_instance.as_ref().unwrap();
+                                    for i in 0..instance.outputs.len() {
+                                        let comp_index = instance.outputs[i];
                                         println!(
                                             "{:#?}",
-                                            instance.components[comp_index].next_outputs[0]
+                                            instance.components[comp_index].inputs[0]
+                                                .other_output
+                                                .weak
+                                                .ptr_eq(
+                                                    &n.components[11]
+                                                        .ic_instance
+                                                        .as_ref()
+                                                        .unwrap()
+                                                        .components[n.components[11]
+                                                        .ic_instance
+                                                        .as_ref()
+                                                        .unwrap()
+                                                        .outputs[i]]
+                                                        .inputs[0]
+                                                        .other_output
+                                                        .weak
+                                                )
                                         );
                                     }
-                                    let instance =
-                                        n.components[11].ic_instance.as_ref().unwrap();
-                                    for i in 0..instance.inputs.len() {
-                                        let comp_index = instance.inputs[i];
+                                    let instance = n.components[11].ic_instance.as_ref().unwrap();
+                                    for i in 0..instance.outputs.len() {
+                                        let comp_index = instance.outputs[i];
                                         println!(
                                             "{:#?}",
-                                            instance.components[comp_index].next_oututs[0]
+                                            instance.components[comp_index].inputs[0]
+                                                .other_output
+                                                .weak
+                                                .upgrade()
+                                                .unwrap()
+                                                .as_ptr()
                                         );
                                     }
                                 }

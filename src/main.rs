@@ -4,10 +4,7 @@ use core::panic;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::str::FromStr;
-use std::sync::{
-    mpsc,
-    mpsc::Receiver,
-};
+use std::sync::{mpsc, mpsc::Receiver};
 use std::{io, thread};
 
 mod sls;
@@ -128,7 +125,8 @@ fn main() {
                         let size = 2usize.pow(new_addr_lines as u32);
                         for _ in 0..*n {
                             v.push({
-                                let mut mux = sls::Component::new(NodeType::MUX, None, id.to_string());
+                                let mut mux =
+                                    sls::Component::new(NodeType::MUX, None, id.to_string());
                                 mux.set_size(size);
                                 id += 1;
                                 mux
@@ -181,7 +179,8 @@ fn main() {
                             .enumerate();
                         for (i, (num_inputs, id)) in iter {
                             for n in 0..num_inputs {
-                                let prev: &sls::Component = &muxes[bit][layer_i - 1][i * num_inputs + n];
+                                let prev: &sls::Component =
+                                    &muxes[bit][layer_i - 1][i * num_inputs + n];
                                 wires.push(sls::Wire::new(
                                     prev.get_id().clone(),
                                     0,
@@ -279,9 +278,11 @@ fn main() {
                 //maybe also path to deps with URIs.json
 
                 //connect bits and stuff
-                let path = std::path::PathBuf::from_str(args.next().get_or_insert(".".to_owned())).unwrap();
-                println!("path: {}",path.display());
+                let path = std::path::PathBuf::from_str(args.next().get_or_insert(".".to_owned()))
+                    .unwrap();
+                println!("path: {}", path.display());
                 n.init_circ(&path);
+                n.get_io_indexes_top();
                 let circ_type = match n.header.id.0.as_str() {
                     //"0282d111-5222-4675-80d7-69156904bf03" => CircType::Star8,
                     _ => CircType::Custom,

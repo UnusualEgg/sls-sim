@@ -11,7 +11,7 @@ use std::time::Instant;
 use std::usize;
 
 #[allow(non_camel_case_types)]
-#[derive(Deserialize, Serialize, Debug, PartialEq, Clone,Copy, Default)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Clone, Copy, Default)]
 pub enum NodeType {
     PULSE_BUTTON,
     #[default]
@@ -116,10 +116,10 @@ pub struct InputState {
     pub in_pin: usize,
 }
 #[derive(Deserialize, Serialize, Clone)]
-struct Input {
+pub struct Input {
     //might change from bool late
     #[serde(skip, default)]
-    other_output: ComponentRef<bool>,
+    pub other_output: ComponentRef<bool>,
     #[serde(rename = "OTHER_CONNECTOR_ID")]
     other_pin: usize,
     #[serde(rename = "OTHER_COMPONENT")]
@@ -186,12 +186,12 @@ impl std::fmt::Display for NodeError {
 impl std::error::Error for NodeError {}
 #[derive(Clone, Default)]
 pub struct ComponentRef<T: Clone> {
-    weak: Weak<RefCell<Vec<T>>>,
-    index: usize,
+    pub weak: Weak<RefCell<Vec<T>>>,
+    pub index: usize,
 }
 
 #[derive(Debug)]
-enum ComponentInputError {
+pub enum ComponentInputError {
     IndexError(usize),
     ComponentNotExit,
 }
@@ -205,7 +205,7 @@ impl<T: std::clone::Clone> ComponentRef<T> {
     pub fn new(weak: Weak<RefCell<Vec<T>>>, index: usize) -> Self {
         Self { weak, index }
     }
-    fn get(&self) -> Result<T, ComponentInputError> {
+    pub fn get(&self) -> Result<T, ComponentInputError> {
         match self.weak.upgrade() {
             None => Err(ComponentInputError::ComponentNotExit),
             Some(v) => match v.borrow().get(self.index) {
@@ -223,7 +223,7 @@ pub struct Component {
     pub node_type: NodeType,
     //first we get the inputs then store them into input_states
     #[serde(default, skip_serializing)]
-    inputs: Vec<Input>,
+    pub inputs: Vec<Input>,
     //gets from inputs. Used for easier processing.
     #[serde(skip)]
     pub input_states: Vec<InputState>,
@@ -292,6 +292,8 @@ impl Component {
         }
         let cid = self.cid.as_ref().expect("cid");
         let original = &dependencies[cid];
+        //TODO this just does a shallow clone
+        //we need to do a deep clone including outputs
         let mut new = original.clone();
         //go thru every ic and set instance recursively
         for comp in new
@@ -333,6 +335,9 @@ impl Component {
                 }
             }
         };
+        //-_-
+        //FIXME make this work
+        self.outputs = Rc::new(RefCell::new(Vec::new()));
         let mut outputs = self.outputs.borrow_mut();
         outputs.resize(output_n, false);
         self.next_outputs.resize(output_n, false);
@@ -718,8 +723,8 @@ impl Component {
     fn update_output(&mut self) {
         //self.outputs.borrow_mut().clone_from(&self.next_outputs);
         let mut outputs = self.outputs.borrow_mut();
-        for (i,output) in self.next_outputs.iter().enumerate() {
-            outputs[i]=*output;
+        for (i, output) in self.next_outputs.iter().enumerate() {
+            outputs[i] = *output;
         }
         if let Some(instance) = &mut self.ic_instance.as_mut() {
             for comp in &mut instance.components {
@@ -968,13 +973,26 @@ impl Circuit {
     }
     fn connect(&mut self) {
         //resize output vecs based on the type
+        if self.header.id.0 == "b2f78426-068d-4d99-8e64-dec6fe2ff0a7".to_owned() {
+            //println!("Here!\n{:#?}!!!!!!!!!!", &self);
+        }
         for comp in &mut self.components {
             comp.resize_output();
         }
 
         let mut ids = HashMap::with_capacity(self.components.len());
+        //println!("components: {:?}", (&self.components).as_ptr());
+        //so the components are different
+        //how are the outputs or inputs copied to the next IC?
         for comp in &self.components {
             ids.insert(comp.id.clone(), Rc::downgrade(&comp.outputs));
+        }
+        for (id, r) in &ids {
+            println!("{}: {:#?}", id.0, r.upgrade().unwrap().as_ptr());
+        }
+        for comp in &mut self.components {
+            println!("inputs: {:?}", &comp.inputs);
+            comp.inputs.clear();
         }
         //for comp in &mut self.components {
         //    for input in &mut comp.inputs {
@@ -1005,6 +1023,8 @@ impl Circuit {
                 other_id: wire.from.0.clone(),
                 in_pin: wire.to.1,
             });
+        }
+        for comp in &mut self.components {
             comp.input_states
                 .resize(comp.inputs.len(), InputState::default());
             println!(
@@ -1032,7 +1052,7 @@ impl Circuit {
         //coonnect components
         self.connect();
         //find io
-        self.get_io_indexes_top();
+        //self.get_io_indexes_top();
         println!("wires: {:?}", self.wires);
     }
     pub fn tick(&mut self) {
@@ -1071,7 +1091,7 @@ impl Circuit {
             }
         }
     }
-    fn get_io_indexes_top(&mut self) {
+    pub fn get_io_indexes_top(&mut self) {
         self.components
             .sort_by(|comp1, comp2| comp1.y.partial_cmp(&comp2.y).unwrap());
 
