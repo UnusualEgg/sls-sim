@@ -282,7 +282,6 @@ fn main() {
                     .unwrap();
                 println!("path: {}", path.display());
                 n.init_circ(&path);
-                n.get_io_indexes_top();
                 let circ_type = match n.header.id.0.as_str() {
                     //"0282d111-5222-4675-80d7-69156904bf03" => CircType::Star8,
                     _ => CircType::Custom,

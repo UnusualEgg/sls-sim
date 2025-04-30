@@ -1,12 +1,22 @@
 use crate::sls::{Circuit, NodeType};
-use std::rc::Rc;
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use crate::sls;
+
+fn get_component_output(n: &sls::Circuit, component: usize, output: usize) -> &Weak<RefCell<Vec<bool>>> {
+    &n.components[component].ic_instance.as_ref().unwrap().components
+        [n.components[component].ic_instance.as_ref().unwrap().outputs[output]]
+        .inputs[0]
+        .other_output
+        .weak
+}
+
 pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
-    let mut paused: bool = true;
+    let mut paused: bool = false;
     //timing
     let mut last_tick = Instant::now();
     let target_tps: u64 = 20;
@@ -41,6 +51,9 @@ pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
                                     paused = !paused;
                                     println!("{}", if paused { "paused" } else { "unpaused" });
                                 }
+                                'm' => {
+                                    println!("ms per tick: {}",n.get_speed());
+                                }
                                 't' => {
                                     n.tick();
                                 }
@@ -61,37 +74,23 @@ pub fn run(n: &mut sls::Circuit, stdin_channel: Receiver<String>) {
                                     for i in 0..instance.outputs.len() {
                                         let comp_index = instance.outputs[i];
                                         println!(
-                                            "{:#?}",
+                                            "{} {:#?}",i,
                                             instance.components[comp_index].inputs[0]
                                                 .other_output
                                                 .weak
                                                 .ptr_eq(
-                                                    &n.components[11]
-                                                        .ic_instance
-                                                        .as_ref()
-                                                        .unwrap()
-                                                        .components[n.components[11]
-                                                        .ic_instance
-                                                        .as_ref()
-                                                        .unwrap()
-                                                        .outputs[i]]
-                                                        .inputs[0]
-                                                        .other_output
-                                                        .weak
+                                                    get_component_output(n, 11, i)
                                                 )
                                         );
                                     }
-                                    let instance = n.components[11].ic_instance.as_ref().unwrap();
                                     for i in 0..instance.outputs.len() {
-                                        let comp_index = instance.outputs[i];
                                         println!(
-                                            "{:#?}",
-                                            instance.components[comp_index].inputs[0]
-                                                .other_output
-                                                .weak
-                                                .upgrade()
-                                                .unwrap()
-                                                .as_ptr()
+                                            "7({}) {:#?}",i,
+                                            get_component_output(n, 7, i).as_ptr()
+                                        );
+                                        println!(
+                                            "11({}) {:#?}",i,
+                                            get_component_output(n, 11, i).as_ptr()
                                         );
                                     }
                                 }

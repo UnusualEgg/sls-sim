@@ -1,5 +1,6 @@
 #[deny(unused_must_use)]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use core::panic;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::{self, Debug};
@@ -7,7 +8,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::str::FromStr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::usize;
 
 #[allow(non_camel_case_types)]
@@ -286,29 +287,21 @@ impl Component {
         self.size = Some(size);
     }
     //of IC
-    fn set_instance(&mut self, dependencies: &BTreeMap<String, Circuit>) {
+    fn set_instance(&mut self, dependencies: &BTreeMap<String, Circuit>, deps_path: &Path) {
         if self.ic_instance.is_some() {
             return;
         }
-        let cid = self.cid.as_ref().expect("cid");
-        let original = &dependencies[cid];
         //this just does a shallow clone
         //we need to do a deep clone including outputs
+        let cid = self.cid.as_ref().expect("cid");
+        let original = &dependencies[cid];
         let mut new = original.clone();
         for comp in &mut new.components {
             comp.outputs = Rc::new(RefCell::new(Vec::new()));
         }
-        //go thru every ic and set instance recursively
-        for comp in new
-            .components
-            .iter_mut()
-            .filter(|node| node.node_type == NodeType::INTEGRATED_CIRCUIT)
-        {
-            comp.set_instance(&dependencies);
-        }
         self.ic_instance = Some(new);
         //no idea if this makes a difference
-        self.ic_instance.as_mut().unwrap().connect();
+        self.ic_instance.as_mut().unwrap().init_ic(dependencies,deps_path);
     }
     fn resize_output(&mut self) {
         let output_n = match self.num_of_out {
@@ -525,23 +518,14 @@ impl Component {
                 self.next_outputs[0] = input_pins[n as usize];
             }
             NodeType::CLOCK => {
-                let now = Instant::now();
-                match self.last_cycle {
-                    Some(last_cycle) => {
-                        if now.duration_since(last_cycle).as_millis() as u64 > (self.period / 2) {
-                            self.next_outputs[0] = !self.next_outputs[0];
-                            self.last_cycle = Some(now);
-                        }
-                    }
-                    None => {
-                        self.last_cycle = Some(now);
-                    }
+                if (tick*100)%self.period == 0 {
+                    self.next_outputs[0] = !self.next_outputs[0];
                 }
             }
             NodeType::INTEGRATED_CIRCUIT => {
                 let instance = &mut self.ic_instance.as_mut().unwrap();
                 //set/override instance's inputs
-                for input in &self.input_states {
+                for (i,input) in self.input_states.iter().enumerate() {
                     /*
                     println!(
                     "getting {:?} for {}",
@@ -550,8 +534,12 @@ impl Component {
                     );
                     */
                     let out: bool = input.state;
-                    let comp_index: usize = instance.inputs[input.in_pin];
-                    instance.components[comp_index].outputs.borrow_mut()[0] = out;
+                    let comp_index: usize = match instance.inputs.get(input.in_pin) {
+                        Some(index)=>*index,
+                        None =>{ 
+                            panic!("IC name:{:?} id:{} failed to get input pin {} because it only has {:?}\ninput: {:#?}",self.label,self.cid.as_ref().unwrap(),input.in_pin,&instance.inputs,&self.inputs[i])}
+                    };
+                    instance.components[comp_index].next_outputs[0] = out;
                     /*
                     println!(
                     "next_output {:?}\tset to {} from {}",
@@ -563,14 +551,19 @@ impl Component {
                     comp.next_output(tick);
                 }
                 //set next out based on inner IC
+                //println!("we are {:?}({}) {:?}",self.node_type,self.label.as_ref().unwrap(),instance.header.id);
                 //println!(
-                //    "we have {} inner componenents. and {} out pins",
+                //    "we have {} inner componenents. and {} out pins. {} output pins and  {} comp outputs",
                 //    instance.components.len(),
-                //    self.next_outputs.len()
+                //    self.next_outputs.len(),
+                //    self.outputs.borrow().len(),
+                //    instance.outputs.len(),
                 //);
+                //println!("{:#?}",&instance.outputs);
                 for i in 0..instance.outputs.len() {
                     //println!("get comp {}", instance.outputs[i]);
                     let comp_index: usize = instance.outputs[i];
+                    //println!("{:?} output",instance.components[comp_index].node_type);
                     self.next_outputs[i] = instance.components[comp_index].next_outputs[0];
                 }
             }
@@ -881,6 +874,7 @@ pub struct Header {
     //circ_type: CircuitType,
 }
 
+
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(rename_all = "UPPERCASE")]
 pub struct Circuit {
@@ -899,6 +893,8 @@ pub struct Circuit {
     tick_count: u64,
     #[serde(default)]
     wires: Vec<Wire>,
+    #[serde(skip)]
+    begin: Option<Instant>,
 }
 impl Circuit {
     pub fn new(name: String, id: String, components: Vec<Component>, wires: Vec<Wire>) -> Self {
@@ -962,14 +958,11 @@ impl Circuit {
                 let cid = comp.cid.as_ref().unwrap();
                 if !self.dependencies.contains_key(cid) {
                     let mut p = PathBuf::from(path);
-                    p.push(self.uris.get(cid).unwrap_or(cid));
+                    p.push(self.uris.get(cid).unwrap_or(comp.label.as_ref().unwrap_or(cid)));
                     add_dep(&mut self.dependencies, cid, p.to_str().unwrap());
                 }
             });
         println!("add subdeps");
-        for (_, dep) in &mut self.dependencies {
-            dep.add_deps(path);
-        }
     }
     fn connect(&mut self) {
         //resize output vecs based on the type
@@ -1033,26 +1026,49 @@ impl Circuit {
             );
         }
     }
+    pub fn get_speed(&self) -> u128 {
+        //use begin and tick_count
+        let now = Instant::now();
+        let passed = now.duration_since(self.begin.unwrap());
+        let avg_mspt = passed.as_millis() / self.tick_count as u128;
+        return avg_mspt;
+    }
     pub fn init_circ(&mut self, deps_path: &Path) {
         //add depependencies
         //go thru URIs.json and add each one to dependencies that we need
         self.add_deps(deps_path);
-        //setup dependencies to be cloned
-        for (_, ic) in self.dependencies.iter_mut() {
-            ic.get_io_indexes();
-        }
-        //coonnect components
-        self.connect();
-        let deps_clone = &self.dependencies;
         for comp in self
             .components
             .iter_mut()
             .filter(|node| node.node_type == NodeType::INTEGRATED_CIRCUIT)
         {
-            comp.set_instance(&deps_clone);
+            let cid = comp.cid.as_ref().expect("cid");
+            let original = &self.dependencies[cid];
+            comp.set_instance(&self.dependencies,deps_path);
         }
+        //coonnect components
+        self.connect();
         //println!("wires: {:?}", self.wires);
+        self.get_io_indexes_top();
+        self.begin=Some(Instant::now());
     }
+    pub fn init_ic(&mut self, dependencies: &BTreeMap<String, Circuit>,deps_path: &Path) {
+        //add depependencies
+        //go thru URIs.json and add each one to dependencies that we need
+        //setup dependencies to be cloned
+        for comp in self
+            .components
+            .iter_mut()
+            .filter(|node| node.node_type == NodeType::INTEGRATED_CIRCUIT)
+        {
+            comp.set_instance(dependencies,deps_path);
+        }
+        //coonnect components
+        self.connect();
+        //println!("wires: {:?}", self.wires);
+        self.get_io_indexes();
+    }
+    //1 tick = 100 ms
     pub fn tick(&mut self) {
         for i in 0..self.components.len() {
             if let Err(e) = self.components[i].get_inputs() {
@@ -1060,9 +1076,9 @@ impl Circuit {
                 match &e.t {
                     NodeErrorType::Input(i, id) => {
                         if let Some(c) = self.components.iter().find(|c| &c.id == id) {
-                            eprintln!("other: {} {:?} {:?}", &c.id.0, c.label, c.node_type);
+                            eprintln!("other: {} {:?} {:?}: {}", &c.id.0, c.label, c.node_type,i);
                         } else {
-                            eprintln!("couldn't get other component with id: {}", &id.0);
+                            eprintln!("couldn't get other component with id: {}: {}", &id.0,i);
                         }
                     }
                 }
