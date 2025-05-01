@@ -1,13 +1,12 @@
-#[deny(unused_must_use)]
-use crate::sls::NodeType;
+#![deny(unused_must_use)]
+use slslib::sls;
+use sls::NodeType;
 use core::panic;
-use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::str::FromStr;
 use std::sync::{mpsc, mpsc::Receiver};
 use std::{io, thread};
 
-mod sls;
 mod types;
 
 enum CircType {
@@ -281,7 +280,7 @@ fn main() {
                 let path = std::path::PathBuf::from_str(args.next().get_or_insert(".".to_owned()))
                     .unwrap();
                 println!("path: {}", path.display());
-                n.init_circ(&path);
+                n.init_circ(Some(&path));
                 let circ_type = match n.header.id.0.as_str() {
                     //"0282d111-5222-4675-80d7-69156904bf03" => CircType::Star8,
                     _ => CircType::Custom,

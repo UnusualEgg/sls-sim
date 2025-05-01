@@ -262,6 +262,15 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "slslib",
+]
+
+[[package]]
+name = "slslib"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
